@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 from flask import current_app
+from pathlib import Path
 
 class SQLExecutorService:
     """Enhanced SQL Executor Service for Admin Panel with safety features"""
@@ -45,19 +46,54 @@ class SQLExecutorService:
         ]
     
     def _extract_db_path(self, db_url: str) -> str:
-        """Extract database file path from URL"""
+        """Extract database file path from URL with Flask instance folder support"""
         if db_url.startswith('sqlite:///'):
-            return db_url.replace('sqlite:///', '')
+            relative_path = db_url.replace('sqlite:///', '')
+            
+            # Check if it's an absolute path
+            if os.path.isabs(relative_path):
+                return relative_path
+            
+            # For relative paths, check multiple locations where Flask might put the DB
+            possible_paths = [
+                # Flask instance folder (most common)
+                os.path.join(os.getcwd(), 'instance', relative_path),
+                os.path.join(os.getcwd(), 'backend', 'instance', relative_path),
+            ]
+            
+            # Find the existing database file
+            for path in possible_paths:
+                if os.path.exists(path):
+                    print(f"✅ Found database at: {path}")
+                    return path
+            
+            # If no existing file found, use the first location (instance folder)
+            # This follows Flask's default behavior
+            instance_path = possible_paths[0]
+            
+            # Create instance directory if it doesn't exist
+            instance_dir = os.path.dirname(instance_path)
+            if instance_dir and not os.path.exists(instance_dir):
+                os.makedirs(instance_dir, exist_ok=True)
+                print(f"📁 Created instance directory: {instance_dir}")
+            
+            print(f"📍 Using database path: {instance_path}")
+            return instance_path
+            
         elif db_url.startswith('sqlite://'):
             return db_url.replace('sqlite://', '')
         else:
-            return 'blitz.db'  # fallback
+            return 'instance/blitz.db'  # fallback with instance folder
     
     @contextmanager
     def get_connection(self):
         """Get database connection with proper cleanup"""
         conn = None
         try:
+            # Ensure database file exists
+            if not os.path.exists(self.db_path):
+                raise FileNotFoundError(f"Database file not found at: {self.db_path}")
+            
             conn = sqlite3.connect(self.db_path, timeout=30)
             conn.row_factory = sqlite3.Row  # Enable column access by name
             # Enable foreign keys for SQLite
@@ -117,7 +153,7 @@ class SQLExecutorService:
         return analysis
     
     def execute_query(self, query: str, page: int = 1, per_page: int = 100, 
-                     allow_dangerous: bool = False) -> Dict[str, Any]:
+                    allow_dangerous: bool = False) -> Dict[str, Any]:
         """Execute SQL query with safety checks and pagination"""
         start_time = time.time()
         
@@ -125,6 +161,15 @@ class SQLExecutorService:
             return {
                 'success': False,
                 'error': 'Empty query provided',
+                'execution_time': 0
+            }
+        
+        # Check if database file exists
+        if not os.path.exists(self.db_path):
+            return {
+                'success': False,
+                'error': f'Database file not found at: {self.db_path}',
+                'database_path': self.db_path,
                 'execution_time': 0
             }
         
@@ -173,36 +218,113 @@ class SQLExecutorService:
                     }
                     
         except sqlite3.Error as e:
-            return {
-                'success': False,
-                'error': f'Database error: {str(e)}',
-                'execution_time': round(time.time() - start_time, 3)
-            }
+            error_msg = str(e)
+            execution_time = round(time.time() - start_time, 3)
+            
+            # Enhanced error handling for column-related errors
+            if 'no such column' in error_msg.lower():
+                # Extract table name from query for better error reporting
+                table_suggestions = self._get_table_suggestions_for_error(query, error_msg)
+                return {
+                    'success': False,
+                    'error': f'Database error: {error_msg}',
+                    'database_path': self.db_path,
+                    'execution_time': execution_time,
+                    'suggestions': table_suggestions,
+                    'help': 'Use /api/admin/tables to list available tables and columns'
+                }
+            elif 'no such table' in error_msg.lower():
+                available_tables = self._get_available_tables()
+                return {
+                    'success': False,
+                    'error': f'Database error: {error_msg}',
+                    'database_path': self.db_path,
+                    'execution_time': execution_time,
+                    'available_tables': available_tables,
+                    'help': 'Use /api/admin/tables to list available tables'
+                }
+            else:
+                return {
+                    'success': False,
+                    'error': f'Database error: {error_msg}',
+                    'database_path': self.db_path,
+                    'execution_time': execution_time
+                }
         except Exception as e:
             return {
                 'success': False,
                 'error': f'Execution error: {str(e)}',
+                'database_path': self.db_path,
                 'execution_time': round(time.time() - start_time, 3)
             }
-    
+
+    def _get_table_suggestions_for_error(self, query: str, error_msg: str) -> Dict[str, Any]:
+        """Get table and column suggestions when SQL error occurs"""
+        try:
+            # Extract table name from query (simple regex approach)
+            import re
+            table_matches = re.findall(r'FROM\s+(\w+)', query.upper())
+            
+            suggestions = {}
+            
+            if table_matches:
+                table_name = table_matches[0].lower()
+                table_info = self.get_table_info(table_name)
+                
+                if table_info.get('success'):
+                    columns = [col['name'] for col in table_info.get('columns', [])]
+                    suggestions[table_name] = {
+                        'available_columns': columns,
+                        'total_columns': len(columns)
+                    }
+            
+            # Also get list of all tables
+            all_tables = self._get_available_tables()
+            suggestions['all_tables'] = all_tables
+            
+            return suggestions
+            
+        except Exception:
+            return {'error': 'Could not generate suggestions'}
+
+    def _get_available_tables(self) -> List[str]:
+        """Get list of available tables"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+                tables = [row[0] for row in cursor.fetchall()]
+                return tables
+        except Exception:
+            return []
+
     def _execute_read_query(self, cursor, query: str, page: int, per_page: int, 
-                           start_time: float, analysis: Dict) -> Dict[str, Any]:
+                        start_time: float, analysis: Dict) -> Dict[str, Any]:
         """Execute read-only query with pagination"""
         
         # For SELECT queries, implement pagination
         if analysis['command'] == 'SELECT':
             # First get total count
             try:
+                # Wrap the original query to get count
                 count_query = f"SELECT COUNT(*) FROM ({query}) AS count_subquery"
                 cursor.execute(count_query)
                 total_count = cursor.fetchone()[0]
-            except:
+            except Exception:
                 # If count query fails, proceed without total count
                 total_count = None
             
-            # Add pagination to original query
+            # Add pagination to original query - ensure proper SQL syntax
             offset = (page - 1) * per_page
-            paginated_query = f"{query} LIMIT {per_page} OFFSET {offset}"
+            if query.strip().rstrip(';').upper().find('LIMIT') == -1:
+                paginated_query = f"{query.rstrip(';')} LIMIT {per_page} OFFSET {offset}"
+            else:
+                # Query already has LIMIT, replace it
+                import re
+                paginated_query = re.sub(r'\s+LIMIT\s+\d+(\s+OFFSET\s+\d+)?', 
+                                    f' LIMIT {per_page} OFFSET {offset}', 
+                                    query.rstrip(';'), flags=re.IGNORECASE)
+            
             cursor.execute(paginated_query)
         else:
             # For other read queries (PRAGMA, EXPLAIN, etc.)
@@ -215,7 +337,7 @@ class SQLExecutorService:
         # Fetch results
         rows = cursor.fetchall()
         
-        # Convert rows to list of lists for JSON serialization
+        # Convert rows to list of dicts for JSON serialization
         row_data = []
         for row in rows:
             row_dict = {}
@@ -226,6 +348,8 @@ class SQLExecutorService:
                     value = value.isoformat()
                 elif isinstance(value, (bytes, bytearray)):
                     value = f"<binary data: {len(value)} bytes>"
+                elif isinstance(value, float):
+                    value = round(value, 3)  # Round floats to 3 decimal places
                 row_dict[col] = value
             row_data.append(row_dict)
         
@@ -240,7 +364,8 @@ class SQLExecutorService:
             'per_page': per_page,
             'execution_time': execution_time,
             'query_type': 'READ',
-            'command': analysis['command']
+            'command': analysis['command'],
+            'database_path': self.db_path
         }
         
         if total_count is not None:
@@ -271,6 +396,7 @@ class SQLExecutorService:
                 'execution_time': execution_time,
                 'query_type': 'WRITE' if analysis['is_write'] else 'DDL',
                 'command': analysis['command'],
+                'database_path': self.db_path,
                 'message': f'Query executed successfully. {cursor.rowcount if cursor.rowcount >= 0 else 0} rows affected.'
             }
             
@@ -347,13 +473,15 @@ class SQLExecutorService:
                         'tables': tables,
                         'views': views,
                         'total_tables': len(tables),
-                        'total_views': len(views)
+                        'total_views': len(views),
+                        'database_path': self.db_path
                     }
                     
         except Exception as e:
             return {
                 'success': False,
-                'error': f'Error getting table info: {str(e)}'
+                'error': f'Error getting table info: {str(e)}',
+                'database_path': self.db_path
             }
     
     def get_query_history(self, limit: int = 50) -> List[Dict[str, Any]]:

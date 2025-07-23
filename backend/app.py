@@ -41,15 +41,21 @@ def create_app():
     app.execution_service = ExecutionService(db, app.llm_service)
     app.cost_service = CostService(db)
     app.audit_service = AuditService(db)
+    
+    # Initialize SQL executor with proper database path
     app.sql_executor = SQLExecutorService(app.config['SQLALCHEMY_DATABASE_URI'])
     
     # Thread pool for async execution
     app.executor = ThreadPoolExecutor(max_workers=app.config['MAX_CONCURRENT_EXECUTIONS'])
     
-    
     with app.app_context():
-        db.create_all()
-        create_default_data()
+        # Ensure database and tables exist
+        try:
+            db.create_all()
+            create_default_data()
+            print(f"✅ Database initialized at: {app.sql_executor.db_path}")
+        except Exception as e:
+            print(f"❌ Database initialization error: {e}")
     
     # Before request handler for audit logging
     @app.before_request
@@ -781,8 +787,35 @@ def register_routes(app):
         except Exception as e:
             app.logger.error(f"Get execution status error: {e}")
             return jsonify({'error': 'Failed to fetch execution status'}), 500
-    
-    # Enhanced Admin routes with SQL Executor
+
+
+    @app.route('/api/executions/workflow/<int:workflow_id>', methods=['POST'])
+    @jwt_required()
+    def execute_workflow(workflow_id):
+        try:
+            user_id = int(get_jwt_identity())
+            data = request.get_json()
+            
+            if not data or 'input_data' not in data:
+                return jsonify({'error': 'Input data required'}), 400
+            
+            # Start execution in background
+            execution_id = app.execution_service.execute_workflow_async(
+                workflow_id=workflow_id,
+                input_data=data['input_data'],
+                user_id=user_id
+            )
+            
+            return jsonify({
+                'execution_id': execution_id,
+                'message': 'Workflow execution started'
+            }), 202
+            
+        except Exception as e:
+            app.logger.error(f"Execute workflow error: {e}")
+            return jsonify({'error': 'Failed to execute workflow'}), 500
+
+
     @app.route('/api/admin/sql', methods=['POST'])
     @jwt_required()
     @admin_required
@@ -797,6 +830,11 @@ def register_routes(app):
             per_page = int(data.get('per_page', 100))
             allow_dangerous = data.get('allow_dangerous', False)
             
+            # Enhanced permissions for admin users
+            # Allow more operations for testing and administration
+            if query.upper().startswith(('SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'PRAGMA')):
+                allow_dangerous = True  # Read operations are always safe
+            
             # Use the enhanced SQL executor service
             result = app.sql_executor.execute_query(
                 query=query,
@@ -805,12 +843,91 @@ def register_routes(app):
                 allow_dangerous=allow_dangerous
             )
             
-            return jsonify(result)
+            # Enhanced error handling
+            if not result.get('success', False):
+                error_msg = result.get('error', 'Unknown error')
+                
+                # Check if it's a security-related error
+                if any(word in error_msg.lower() for word in ['blocked', 'dangerous', 'security']):
+                    return jsonify({
+                        'success': False,
+                        'error': error_msg,
+                        'suggestion': 'Try setting allow_dangerous=true for write operations',
+                        'query_analysis': result.get('analysis', {}),
+                        'warnings': result.get('warnings', [])
+                    }), 403  # Forbidden for security blocks
+                else:
+                    return jsonify(result), 400  # Bad request for other errors
+            
+            return jsonify(result), 200
             
         except Exception as e:
             app.logger.error(f"SQL execution error: {e}")
-            return jsonify({'error': f'SQL execution failed: {str(e)}'}), 500
-    
+            return jsonify({
+                'success': False,
+                'error': f'SQL execution failed: {str(e)}',
+                'suggestion': 'Check query syntax and database connection'
+            }), 500
+
+
+    @app.route('/api/admin/sql/schema', methods=['GET'])
+    @jwt_required()
+    @admin_required
+    def get_database_schema():
+        try:
+            table_name = request.args.get('table')
+            
+            if table_name:
+                # Get specific table schema
+                result = app.sql_executor.get_table_info(table_name)
+            else:
+                # Get all tables overview
+                result = app.sql_executor.get_table_info()
+            
+            return jsonify(result)
+            
+        except Exception as e:
+            app.logger.error(f"Get database schema error: {e}")
+            return jsonify({'error': f'Failed to get database schema: {str(e)}'}), 500
+
+    @app.route('/api/admin/sql/tables', methods=['GET'])
+    @jwt_required()
+    @admin_required  
+    def get_table_list():
+        """Get list of all tables with basic info"""
+        try:
+            result = app.sql_executor.get_table_info()
+            
+            if result.get('success'):
+                # Format for easier consumption
+                tables_info = []
+                for table in result.get('tables', []):
+                    tables_info.append({
+                        'name': table['name'],
+                        'row_count': table.get('row_count', 0),
+                        'type': 'table'
+                    })
+                
+                for view in result.get('views', []):
+                    tables_info.append({
+                        'name': view['name'], 
+                        'row_count': 0,
+                        'type': 'view'
+                    })
+                
+                return jsonify({
+                    'success': True,
+                    'tables': tables_info,
+                    'total_tables': result.get('total_tables', 0),
+                    'total_views': result.get('total_views', 0)
+                })
+            else:
+                return jsonify(result), 400
+                
+        except Exception as e:
+            app.logger.error(f"Get table list error: {e}")
+            return jsonify({'error': f'Failed to get table list: {str(e)}'}), 500
+
     @app.route('/api/admin/sql/validate', methods=['POST'])
     @jwt_required()
     @admin_required
@@ -969,5 +1086,6 @@ if __name__ == '__main__':
     app.run(
         host=app.config['SERVER_HOST'], 
         port=app.config['SERVER_PORT'], 
-        debug=app.config['DEBUG']
+        debug=False,
+        use_reloader=False
     )

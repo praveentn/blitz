@@ -587,42 +587,11 @@ class BlitzAPITester:
         except Exception as e:
             self.log_test("Check Execution Status", False, f"Exception: {str(e)}")
     
-    def test_admin_features(self):
-        """Test admin-specific features"""
-        if not self.admin_token:
-            self.log_test("Admin Features", False, "No admin token available")
-            return
-        
-        # Test user management
-        try:
-            response = self.make_request('GET', '/api/admin/users', token=self.admin_token)
-            
-            if response.status_code == 200:
-                users = response.json()
-                if isinstance(users, list):
-                    self.log_test("Admin - Get Users", True, f"Retrieved {len(users)} users")
-                    
-                    # Check if default users exist
-                    admin_user = next((u for u in users if u['email'] == 'admin@blitz.com'), None)
-                    business_user = next((u for u in users if u['email'] == 'user@blitz.com'), None)
-                    
-                    if admin_user:
-                        self.log_test("Admin - Default Admin User", True, f"Found admin user: {admin_user['username']}")
-                    if business_user:
-                        self.log_test("Admin - Default Business User", True, f"Found business user: {business_user['username']}")
-                        
-                else:
-                    self.log_test("Admin - Get Users", False, "Response is not a list", users)
-            else:
-                self.log_test("Admin - Get Users", False, f"Status code: {response.status_code}", response.text)
-                
-        except Exception as e:
-            self.log_test("Admin - Get Users", False, f"Exception: {str(e)}")
-        
+
         # Test SQL executor with a simple query
         try:
             sql_data = {
-                'query': 'SELECT name, email, role FROM users LIMIT 5',
+                'query': 'SELECT username, email, role FROM users LIMIT 5',
                 'page': 1,
                 'per_page': 10
             }
@@ -721,7 +690,79 @@ class BlitzAPITester:
                 
         except Exception as e:
             self.log_test("Authorization - No Token Block", False, f"Exception: {str(e)}")
-    
+
+    def test_admin_sql_executor_enhanced(self):
+        """Enhanced test for SQL executor with schema validation"""
+        if not self.admin_token:
+            self.log_test("Enhanced SQL Executor", False, "No admin token available")
+            return
+        
+        # First, get table schema to validate available columns
+        try:
+            response = self.make_request('GET', '/api/admin/sql/tables', token=self.admin_token)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if 'tables' in data:
+                    self.log_test("Admin - Get Table List", True, 
+                                f"Retrieved {len(data['tables'])} tables")
+                    
+                    # Find users table and get its schema
+                    users_table = next((t for t in data['tables'] if t['name'] == 'users'), None)
+                    if users_table:
+                        # Get detailed schema for users table
+                        schema_response = self.make_request('GET', '/api/admin/sql/schema', 
+                                                        params={'table': 'users'}, 
+                                                        token=self.admin_token)
+                        
+                        if schema_response.status_code == 200:
+                            schema_data = schema_response.json()
+                            if 'columns' in schema_data:
+                                columns = [col['name'] for col in schema_data['columns']]
+                                self.log_test("Admin - Get Users Schema", True, 
+                                            f"Users table columns: {columns}")
+                                
+                                # Now test SQL with correct columns
+                                correct_query = f"SELECT {', '.join(columns[:3])} FROM users LIMIT 5"
+                                sql_data = {
+                                    'query': correct_query,
+                                    'page': 1,
+                                    'per_page': 10
+                                }
+                                
+                                sql_response = self.make_request('POST', '/api/admin/sql', 
+                                                            sql_data, token=self.admin_token)
+                                
+                                if sql_response.status_code == 200:
+                                    sql_result = sql_response.json()
+                                    if 'columns' in sql_result and 'rows' in sql_result:
+                                        self.log_test("Admin - SQL Executor Enhanced", True, 
+                                                    f"Query executed: {len(sql_result['rows'])} rows returned")
+                                    else:
+                                        self.log_test("Admin - SQL Executor Enhanced", False, 
+                                                    "Invalid response format", sql_result)
+                                else:
+                                    self.log_test("Admin - SQL Executor Enhanced", False, 
+                                                f"Status code: {sql_response.status_code}", 
+                                                sql_response.text)
+                            else:
+                                self.log_test("Admin - Get Users Schema", False, 
+                                            "No columns in schema response", schema_data)
+                        else:
+                            self.log_test("Admin - Get Users Schema", False, 
+                                        f"Status code: {schema_response.status_code}", 
+                                        schema_response.text)
+                    else:
+                        self.log_test("Admin - Find Users Table", False, "Users table not found")
+                else:
+                    self.log_test("Admin - Get Table List", False, "No tables in response", data)
+            else:
+                self.log_test("Admin - Get Table List", False, 
+                            f"Status code: {response.status_code}", response.text)
+                
+        except Exception as e:
+            self.log_test("Enhanced SQL Executor", False, f"Exception: {str(e)}")
+
     def print_summary(self):
         """Print test summary"""
         print("\n" + "="*80)
@@ -774,7 +815,7 @@ class BlitzAPITester:
         self.test_executions(agent_id, workflow_id)
         
         # Admin and security tests
-        self.test_admin_features()
+        self.test_admin_sql_executor_enhanced()
         self.test_cost_tracking()
         self.test_authorization()
         

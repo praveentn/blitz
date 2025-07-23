@@ -45,7 +45,20 @@ class Config:
             'temperature': float(os.environ.get('AZURE_OPENAI_TEMPERATURE', 0.7))
         }
     }
-    
+
+    # Database Configuration
+    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') or 'sqlite:///blitz.db'
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        'pool_timeout': 30,
+        'pool_recycle': 3600,
+        'pool_pre_ping': True,
+        'connect_args': {
+            'check_same_thread': False,  # Important for SQLite threading
+            'timeout': 30
+        } if 'sqlite' in (os.environ.get('DATABASE_URL') or 'sqlite:///blitz.db') else {}
+    }
+
     # Rate Limiting Configuration
     RATELIMIT_STORAGE_URL = os.environ.get('REDIS_URL') or 'memory://'
     RATELIMIT_DEFAULT = "1000 per hour"
