@@ -349,8 +349,9 @@ def register_routes(app):
     @app.route('/api/health', methods=['GET'])
     def health_check():
         try:
+            from sqlalchemy import text
             # Check database connectivity
-            db.session.execute('SELECT 1')
+            db.session.execute(text('SELECT 1'))
             db_status = 'healthy'
         except Exception as e:
             db_status = f'unhealthy: {str(e)}'
