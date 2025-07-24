@@ -835,59 +835,6 @@ def register_routes(app):
             return jsonify({'error': 'Failed to execute workflow'}), 500
 
 
-    @app.route('/api/admin/sql', methods=['POST'])
-    @jwt_required()
-    @admin_required
-    def execute_sql():
-        try:
-            data = request.get_json()
-            if not data or 'query' not in data:
-                return jsonify({'error': 'SQL query required'}), 400
-            
-            query = data['query'].strip()
-            page = int(data.get('page', 1))
-            per_page = int(data.get('per_page', 100))
-            allow_dangerous = data.get('allow_dangerous', False)
-            
-            # Enhanced permissions for admin users
-            # Allow more operations for testing and administration
-            if query.upper().startswith(('SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'PRAGMA')):
-                allow_dangerous = True  # Read operations are always safe
-            
-            # Use the enhanced SQL executor service
-            result = app.sql_executor.execute_query(
-                query=query,
-                page=page,
-                per_page=per_page,
-                allow_dangerous=allow_dangerous
-            )
-            
-            # Enhanced error handling
-            if not result.get('success', False):
-                error_msg = result.get('error', 'Unknown error')
-                
-                # Check if it's a security-related error
-                if any(word in error_msg.lower() for word in ['blocked', 'dangerous', 'security']):
-                    return jsonify({
-                        'success': False,
-                        'error': error_msg,
-                        'suggestion': 'Try setting allow_dangerous=true for write operations',
-                        'query_analysis': result.get('analysis', {}),
-                        'warnings': result.get('warnings', [])
-                    }), 403  # Forbidden for security blocks
-                else:
-                    return jsonify(result), 400  # Bad request for other errors
-            
-            return jsonify(result), 200
-            
-        except Exception as e:
-            app.logger.error(f"SQL execution error: {e}")
-            return jsonify({
-                'success': False,
-                'error': f'SQL execution failed: {str(e)}',
-                'suggestion': 'Check query syntax and database connection'
-            }), 500
-
 
     @app.route('/api/admin/sql/schema', methods=['GET'])
     @jwt_required()
@@ -1548,6 +1495,216 @@ def register_routes(app):
         except Exception as e:
             app.logger.error(f"Get table data error: {e}")
             return jsonify({'error': 'Failed to fetch table data'}), 500
+
+
+
+    @app.route('/api/admin/sql', methods=['POST'])
+    @jwt_required()
+    @admin_required
+    def execute_sql():
+        try:
+            data = request.get_json()
+            if not data or 'query' not in data:
+                return jsonify({'error': 'SQL query required'}), 400
+            
+            query = data['query'].strip()
+            page = int(data.get('page', 1))
+            page_size = int(data.get('page_size', data.get('per_page', 100)))  # Support both parameters
+            allow_dangerous = data.get('allow_dangerous', False)
+            
+            # Enhanced permissions for admin users
+            if query.upper().startswith(('SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'PRAGMA')):
+                allow_dangerous = True  # Read operations are always safe
+            
+            # Fixed: Use correct parameter names
+            result = app.sql_executor.execute_query(
+                query=query,
+                params=None,
+                page=page,
+                page_size=page_size,
+                allow_dangerous=allow_dangerous
+            )
+            
+            if not result.get('success', False):
+                error_msg = result.get('error', 'Unknown error')
+                
+                if any(word in error_msg.lower() for word in ['blocked', 'dangerous', 'security']):
+                    return jsonify({
+                        'success': False,
+                        'error': error_msg,
+                        'suggestion': 'Try setting allow_dangerous=true for write operations',
+                        'query_analysis': result.get('analysis', {}),
+                        'warnings': result.get('warnings', [])
+                    }), 403
+                else:
+                    return jsonify(result), 400
+            
+            return jsonify(result), 200
+            
+        except Exception as e:
+            app.logger.error(f"SQL execution error: {e}")
+            return jsonify({
+                'success': False,
+                'error': f'SQL execution failed: {str(e)}',
+                'suggestion': 'Check query syntax and database connection'
+            }), 500
+
+    # Add missing database/tables route to match frontend expectations
+    @app.route('/api/admin/database/tables', methods=['GET'])
+    @jwt_required()
+    @admin_required
+    def get_database_tables_alt():
+        """Alternative route to match frontend API calls"""
+        try:
+            tables = app.sql_executor.get_tables()
+            return jsonify({'data': tables})
+        except Exception as e:
+            app.logger.error(f"Get database tables error: {e}")
+            return jsonify({'error': 'Failed to fetch database tables'}), 500
+
+    @app.route('/api/admin/database/tables/<table_name>/schema', methods=['GET'])
+    @jwt_required()
+    @admin_required
+    def get_database_table_schema_alt(table_name):
+        """Alternative route for table schema"""
+        try:
+            schema = app.sql_executor.get_table_schema(table_name)
+            return jsonify({'data': schema})
+        except Exception as e:
+            app.logger.error(f"Get table schema error: {e}")
+            return jsonify({'error': 'Failed to fetch table schema'}), 500
+
+    @app.route('/api/admin/database/tables/<table_name>/data', methods=['GET'])
+    @jwt_required()
+    @admin_required
+    def get_database_table_data_alt(table_name):
+        """Alternative route for table data"""
+        try:
+            page = int(request.args.get('page', 1))
+            page_size = int(request.args.get('page_size', 50))
+            
+            data = app.sql_executor.get_table_data(table_name, page, page_size)
+            return jsonify({'data': data})
+        except Exception as e:
+            app.logger.error(f"Get table data error: {e}")
+            return jsonify({'error': 'Failed to fetch table data'}), 500
+
+    # Add User Management routes
+    @app.route('/api/admin/users', methods=['GET'])
+    @jwt_required()
+    @admin_required
+    def get_all_users():
+        try:
+            users = User.query.all()
+            users_data = []
+            for user in users:
+                user_data = user.to_dict()
+                # Add additional computed fields
+                user_data['total_executions'] = Execution.query.filter_by(user_id=user.id).count()
+                user_data['total_cost'] = round(
+                    db.session.query(db.func.sum(Cost.amount))
+                    .filter_by(user_id=user.id).scalar() or 0.0, 2
+                )
+                users_data.append(user_data)
+            
+            return jsonify({'data': users_data})
+        except Exception as e:
+            app.logger.error(f"Get users error: {e}")
+            return jsonify({'error': 'Failed to fetch users'}), 500
+
+    @app.route('/api/admin/users/<int:user_id>', methods=['PUT'])
+    @jwt_required()
+    @admin_required
+    def update_user_by_admin(user_id):
+        try:
+            user = User.query.get(user_id)
+            if not user:
+                return jsonify({'error': 'User not found'}), 404
+            
+            data = request.get_json()
+            if not data:
+                return jsonify({'error': 'No data provided'}), 400
+            
+            # Update allowed fields
+            if 'role' in data and data['role'] in ['admin', 'business_user']:
+                user.role = data['role']
+            if 'is_active' in data:
+                user.is_active = bool(data['is_active'])
+            if 'cost_limit' in data:
+                user.cost_limit = round(float(data['cost_limit']), 2)
+            
+            user.updated_at = datetime.utcnow()
+            db.session.commit()
+            
+            return jsonify({
+                'message': 'User updated successfully',
+                'user': user.to_dict()
+            })
+        except Exception as e:
+            app.logger.error(f"Update user error: {e}")
+            db.session.rollback()
+            return jsonify({'error': 'Failed to update user'}), 500
+
+    # Add System Health endpoint
+    @app.route('/api/admin/system/health', methods=['GET'])
+    @jwt_required()
+    @admin_required
+    def get_system_health():
+        try:
+            # Database health
+            try:
+                db.session.execute(text('SELECT 1'))
+                db_health = {'status': 'healthy', 'latency_ms': 0}
+            except Exception as e:
+                db_health = {'status': 'unhealthy', 'error': str(e)}
+            
+            # LLM service health
+            try:
+                llm_health = {
+                    'status': 'configured' if app.llm_service.clients.get('azure_openai') else 'not_configured',
+                    'providers': list(app.llm_service.clients.keys())
+                }
+            except Exception as e:
+                llm_health = {'status': 'error', 'error': str(e)}
+            
+            # File system health
+            import shutil
+            disk_usage = shutil.disk_usage('.')
+            free_space_gb = round(disk_usage.free / (1024**3), 2)
+            
+            # Get database info
+            db_info = app.sql_executor.get_database_info()
+            
+            health_data = {
+                'timestamp': datetime.utcnow().isoformat(),
+                'overall_status': 'healthy',
+                'components': {
+                    'database': db_health,
+                    'llm_service': llm_health,
+                    'file_system': {
+                        'status': 'healthy' if free_space_gb > 1.0 else 'warning',
+                        'free_space_gb': free_space_gb
+                    },
+                    'sql_executor': {
+                        'status': 'healthy',
+                        'database_path': app.sql_executor.db_path,
+                        'database_size_mb': db_info.get('database_size_mb', 0)
+                    }
+                },
+                'metrics': {
+                    'total_users': User.query.count(),
+                    'total_models': Model.query.filter_by(is_active=True).count(),
+                    'total_agents': Agent.query.filter_by(is_active=True).count(),
+                    'total_workflows': Workflow.query.filter_by(is_active=True).count(),
+                    'total_executions': Execution.query.count(),
+                    'database_info': db_info
+                }
+            }
+            
+            return jsonify(health_data)
+        except Exception as e:
+            app.logger.error(f"System health check error: {e}")
+            return jsonify({'error': 'Failed to get system health'}), 500
 
 
     return app

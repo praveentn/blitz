@@ -1,87 +1,95 @@
-// src/services/auth.js
+// src/services/auth.js - Fixed authentication with proper response handling
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { apiService, handleApiError, handleApiSuccess } from './api';
+import { toast } from 'react-hot-toast';
 
-const AuthContext = createContext();
+// Create the auth context
+const AuthContext = createContext({});
 
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
-};
-
+// Auth provider component
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Initialize auth state from localStorage
+  // Check for existing session on mount
   useEffect(() => {
-    const initAuth = async () => {
+    const token = localStorage.getItem('token');
+    const userData = localStorage.getItem('user');
+    
+    if (token && userData) {
       try {
-        const token = localStorage.getItem('token');
-        const userData = localStorage.getItem('user');
-        
-        if (token && userData) {
-          const parsedUser = JSON.parse(userData);
-          setUser(parsedUser);
-          
-          // Verify token is still valid by making a test API call
-          await apiService.dashboard.getStats();
-        }
+        setUser(JSON.parse(userData));
       } catch (error) {
-        // Token is invalid, clear storage
+        console.error('Invalid user data in localStorage:', error);
         localStorage.removeItem('token');
         localStorage.removeItem('user');
-        setUser(null);
-      } finally {
-        setLoading(false);
       }
-    };
-
-    initAuth();
+    }
+    setLoading(false);
   }, []);
 
   const login = async (email, password) => {
     try {
-      setLoading(true);
-      const response = await apiService.auth.login(email, password);
-      const { access_token, user: userData } = response.data;
+      // Make direct API call instead of using apiService to avoid circular dependency
+      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5123/api'}/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email, password }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Login failed');
+      }
+
+      const data = await response.json();
       
-      // Store token and user data
+      // Handle response data structure - it might be nested or direct
+      const { access_token, user: userData } = data;
+      
+      if (!access_token || !userData) {
+        throw new Error('Invalid response format from server');
+      }
+
+      // Store auth data
       localStorage.setItem('token', access_token);
       localStorage.setItem('user', JSON.stringify(userData));
       setUser(userData);
       
-      handleApiSuccess('Login successful!');
+      toast.success(`Welcome back, ${userData.username}!`);
       return { success: true };
+      
     } catch (error) {
-      const errorMessage = handleApiError(error, 'Login failed');
-      return { success: false, error: errorMessage };
-    } finally {
-      setLoading(false);
+      console.error('Login error:', error);
+      toast.error(error.message || 'Login failed');
+      return { success: false, error: error.message };
     }
   };
 
   const register = async (userData) => {
     try {
-      setLoading(true);
-      const response = await apiService.auth.register(userData);
-      const { access_token, user: newUser } = response.data;
+      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5123/api'}/auth/register`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(userData),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Registration failed');
+      }
+
+      const data = await response.json();
+      toast.success('Registration successful! Please login.');
+      return { success: true, data };
       
-      // Store token and user data
-      localStorage.setItem('token', access_token);
-      localStorage.setItem('user', JSON.stringify(newUser));
-      setUser(newUser);
-      
-      handleApiSuccess('Registration successful!');
-      return { success: true };
     } catch (error) {
-      const errorMessage = handleApiError(error, 'Registration failed');
-      return { success: false, error: errorMessage };
-    } finally {
-      setLoading(false);
+      console.error('Registration error:', error);
+      toast.error(error.message || 'Registration failed');
+      return { success: false, error: error.message };
     }
   };
 
@@ -89,27 +97,18 @@ export const AuthProvider = ({ children }) => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     setUser(null);
-    handleApiSuccess('Logged out successfully');
-  };
-
-  // Check if user has admin role
-  const isAdmin = () => {
-    return user?.role === 'admin';
-  };
-
-  // Check if user has business user role or higher
-  const isBusinessUser = () => {
-    return user?.role === 'business_user' || user?.role === 'admin';
+    toast.success('Logged out successfully');
   };
 
   const value = {
     user,
-    loading,
     login,
     register,
     logout,
-    isAdmin,
-    isBusinessUser,
+    loading,
+    isAuthenticated: !!user,
+    isAdmin: () => user?.role === 'admin', // Keep as function for consistency
+    isBusinessUser: () => user?.role === 'business_user' || user?.role === 'admin'
   };
 
   return (
@@ -117,4 +116,13 @@ export const AuthProvider = ({ children }) => {
       {children}
     </AuthContext.Provider>
   );
+};
+
+// Hook to use auth context
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
 };

@@ -1,4 +1,4 @@
-// src/components/Sidebar.js
+// src/components/Sidebar.js - Fixed version
 import React, { Fragment } from 'react';
 import { Dialog, Transition } from '@headlessui/react';
 import { Link, useLocation } from 'react-router-dom';
@@ -23,7 +23,7 @@ const navigation = [
   { name: 'Tools', href: '/tools', icon: WrenchScrewdriverIcon },
   { name: 'Agents', href: '/agents', icon: UserGroupIcon },
   { name: 'Workflows', href: '/workflows', icon: Squares2X2Icon },
-  { name: 'Executions', href: '/executions', icon: PlayIcon },
+  { name: 'Executioner', href: '/executions', icon: PlayIcon },
   { name: 'Cost Tracker', href: '/costs', icon: ChartBarIcon },
 ];
 
@@ -37,7 +37,7 @@ function classNames(...classes) {
 
 const Sidebar = ({ sidebarOpen, setSidebarOpen }) => {
   const location = useLocation();
-  const { isAdmin } = useAuth();
+  const { isAdmin } = useAuth(); // isAdmin is now a boolean property, not a function
 
   const isActive = (href) => location.pathname === href;
 
@@ -88,7 +88,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }) => {
               </ul>
             </li>
 
-            {/* Admin Section */}
+            {/* Admin Section - Use isAdmin as function */}
             {isAdmin() && (
               <li>
                 <div className="text-xs font-semibold leading-6 text-gray-400">

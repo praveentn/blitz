@@ -1,52 +1,82 @@
-// src/pages/LoginPage.js
-import React, { useState } from 'react';
-import { Navigate } from 'react-router-dom';
-import { 
-  CpuChipIcon, 
-  EyeIcon, 
-  EyeSlashIcon,
-  SparklesIcon 
-} from '@heroicons/react/24/outline';
+// src/pages/LoginPage.js - Fixed login handling
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { EyeIcon, EyeSlashIcon, BoltIcon } from '@heroicons/react/24/outline';
 import { useAuth } from '../services/auth';
 import LoadingSpinner from '../components/LoadingSpinner';
 
 const LoginPage = () => {
-  const [isLogin, setIsLogin] = useState(true);
   const [formData, setFormData] = useState({
     email: '',
-    password: '',
-    username: '',
-    role: 'business_user'
+    password: ''
   });
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  
-  const { user, login, register } = useAuth();
+  const [errors, setErrors] = useState({});
 
-  // If already logged in, redirect to dashboard
-  if (user) {
-    return <Navigate to="/dashboard" replace />;
-  }
+  const { login, isAuthenticated } = useAuth();
+  const navigate = useNavigate();
+
+  // Redirect if already authenticated
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate('/dashboard');
+    }
+  }, [isAuthenticated, navigate]);
 
   const handleChange = (e) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value
-    });
+    const { name, value } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+    // Clear error when user starts typing
+    if (errors[name]) {
+      setErrors(prev => ({
+        ...prev,
+        [name]: ''
+      }));
+    }
+  };
+
+  const validateForm = () => {
+    const newErrors = {};
+    
+    if (!formData.email.trim()) {
+      newErrors.email = 'Email is required';
+    } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
+      newErrors.email = 'Email is invalid';
+    }
+    
+    if (!formData.password) {
+      newErrors.password = 'Password is required';
+    } else if (formData.password.length < 6) {
+      newErrors.password = 'Password must be at least 6 characters';
+    }
+    
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setLoading(true);
+    
+    if (!validateForm()) {
+      return;
+    }
 
+    setLoading(true);
     try {
-      if (isLogin) {
-        await login(formData.email, formData.password);
+      const result = await login(formData.email, formData.password);
+      
+      if (result.success) {
+        navigate('/dashboard');
       } else {
-        await register(formData);
+        setErrors({ submit: result.error || 'Login failed' });
       }
     } catch (error) {
-      // Error handling is done in the auth service
+      console.error('Login error:', error);
+      setErrors({ submit: 'An unexpected error occurred' });
     } finally {
       setLoading(false);
     }
@@ -59,207 +89,137 @@ const LoginPage = () => {
       demo: { email: 'demo@blitz.com', password: 'demo123' }
     };
     
-    setFormData({
-      ...formData,
-      email: credentials[role].email,
-      password: credentials[role].password
-    });
+    setFormData(credentials[role]);
+    setErrors({});
   };
 
   return (
-    <div className="min-h-screen flex">
-      {/* Left Side - Branding */}
-      <div className="hidden lg:flex lg:w-1/2 bg-gradient-to-br from-blue-600 via-blue-700 to-blue-800 relative overflow-hidden">
-        <div className="absolute inset-0 bg-black opacity-20"></div>
-        <div className="relative z-10 flex flex-col justify-center px-12 text-white">
-          <div className="flex items-center mb-8">
-            <div className="p-3 bg-white/10 backdrop-blur-sm rounded-xl mr-4">
-              <CpuChipIcon className="h-8 w-8" />
-            </div>
-            <div>
-              <h1 className="text-3xl font-bold">Blitz AI Framework</h1>
-              <p className="text-blue-100">Enterprise Agentic AI Platform</p>
-            </div>
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 py-12 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-md w-full space-y-8">
+        {/* Header */}
+        <div className="text-center">
+          <div className="mx-auto h-16 w-16 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center">
+            <BoltIcon className="h-8 w-8 text-white" />
           </div>
-          
-          <div className="space-y-6">
-            <div className="flex items-start space-x-4">
-              <SparklesIcon className="h-6 w-6 mt-1 text-blue-200" />
-              <div>
-                <h3 className="font-semibold mb-2">No-Code AI Workflows</h3>
-                <p className="text-blue-100">Build complex AI workflows with drag-and-drop interface. No coding required.</p>
-              </div>
-            </div>
-            
-            <div className="flex items-start space-x-4">
-              <CpuChipIcon className="h-6 w-6 mt-1 text-blue-200" />
-              <div>
-                <h3 className="font-semibold mb-2">Enterprise Security</h3>
-                <p className="text-blue-100">Role-based access control, audit trails, and comprehensive cost tracking.</p>
-              </div>
-            </div>
-            
-            <div className="flex items-start space-x-4">
-              <SparklesIcon className="h-6 w-6 mt-1 text-blue-200" />
-              <div>
-                <h3 className="font-semibold mb-2">Azure OpenAI Integration</h3>
-                <p className="text-blue-100">Seamlessly integrate with Azure OpenAI for powerful language models.</p>
-              </div>
-            </div>
-          </div>
-          
-          <div className="mt-12 p-6 bg-white/10 backdrop-blur-sm rounded-xl">
-            <h4 className="font-semibold mb-3">Demo Accounts</h4>
-            <div className="space-y-2 text-sm">
-              <button
-                onClick={() => fillDemoCredentials('admin')}
-                className="block w-full text-left p-2 hover:bg-white/10 rounded transition-colors"
-              >
-                <span className="font-medium">Admin:</span> admin@blitz.com / admin123
-              </button>
-              <button
-                onClick={() => fillDemoCredentials('user')}
-                className="block w-full text-left p-2 hover:bg-white/10 rounded transition-colors"
-              >
-                <span className="font-medium">Business User:</span> user@blitz.com / user123
-              </button>
-              <button
-                onClick={() => fillDemoCredentials('demo')}
-                className="block w-full text-left p-2 hover:bg-white/10 rounded transition-colors"
-              >
-                <span className="font-medium">Demo:</span> demo@blitz.com / demo123
-              </button>
-            </div>
+          <h2 className="mt-6 text-3xl font-bold text-gray-900">
+            Welcome to Blitz AI
+          </h2>
+          <p className="mt-2 text-sm text-gray-600">
+            Enterprise Agentic AI Framework
+          </p>
+        </div>
+
+        {/* Demo Credentials */}
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <h3 className="text-sm font-medium text-blue-800 mb-3">Demo Accounts</h3>
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              onClick={() => fillDemoCredentials('admin')}
+              className="text-xs bg-white border border-blue-200 rounded px-2 py-1 hover:bg-blue-50 transition-colors"
+            >
+              Admin
+            </button>
+            <button
+              onClick={() => fillDemoCredentials('user')}
+              className="text-xs bg-white border border-blue-200 rounded px-2 py-1 hover:bg-blue-50 transition-colors"
+            >
+              User
+            </button>
+            <button
+              onClick={() => fillDemoCredentials('demo')}
+              className="text-xs bg-white border border-blue-200 rounded px-2 py-1 hover:bg-blue-50 transition-colors"
+            >
+              Demo
+            </button>
           </div>
         </div>
-      </div>
 
-      {/* Right Side - Login Form */}
-      <div className="flex-1 flex flex-col justify-center px-8 sm:px-12 lg:px-16">
-        <div className="max-w-md w-full mx-auto">
-          <div className="text-center mb-8">
-            <div className="flex items-center justify-center mb-4 lg:hidden">
-              <CpuChipIcon className="h-10 w-10 text-blue-600 mr-3" />
-              <h1 className="text-2xl font-bold text-gray-900">Blitz AI</h1>
-            </div>
-            <h2 className="text-3xl font-bold text-gray-900">
-              {isLogin ? 'Welcome back' : 'Create account'}
-            </h2>
-            <p className="mt-2 text-gray-600">
-              {isLogin 
-                ? 'Sign in to your Blitz AI account' 
-                : 'Start building AI workflows today'
-              }
-            </p>
+        {/* Login Form */}
+        <form className="bg-white shadow-xl rounded-lg px-8 py-8 space-y-6" onSubmit={handleSubmit}>
+          {/* Email Field */}
+          <div>
+            <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
+              Email Address
+            </label>
+            <input
+              id="email"
+              name="email"
+              type="email"
+              value={formData.email}
+              onChange={handleChange}
+              className={`w-full px-3 py-2 border rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors ${
+                errors.email ? 'border-red-300' : 'border-gray-300'
+              }`}
+              placeholder="Enter your email"
+            />
+            {errors.email && (
+              <p className="mt-1 text-sm text-red-600">{errors.email}</p>
+            )}
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-6">
-            {!isLogin && (
-              <div>
-                <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-2">
-                  Username
-                </label>
-                <input
-                  id="username"
-                  name="username"
-                  type="text"
-                  required={!isLogin}
-                  value={formData.username}
-                  onChange={handleChange}
-                  className="form-input"
-                  placeholder="Enter your username"
-                />
-              </div>
-            )}
-
-            <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
-                Email address
-              </label>
+          {/* Password Field */}
+          <div>
+            <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
+              Password
+            </label>
+            <div className="relative">
               <input
-                id="email"
-                name="email"
-                type="email"
-                required
-                value={formData.email}
+                id="password"
+                name="password"
+                type={showPassword ? 'text' : 'password'}
+                value={formData.password}
                 onChange={handleChange}
-                className="form-input"
-                placeholder="Enter your email"
+                className={`w-full px-3 py-2 pr-10 border rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors ${
+                  errors.password ? 'border-red-300' : 'border-gray-300'
+                }`}
+                placeholder="Enter your password"
               />
-            </div>
-
-            <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-2">
-                Password
-              </label>
-              <div className="relative">
-                <input
-                  id="password"
-                  name="password"
-                  type={showPassword ? 'text' : 'password'}
-                  required
-                  value={formData.password}
-                  onChange={handleChange}
-                  className="form-input pr-10"
-                  placeholder="Enter your password"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute inset-y-0 right-0 pr-3 flex items-center"
-                >
-                  {showPassword ? (
-                    <EyeSlashIcon className="h-5 w-5 text-gray-400" />
-                  ) : (
-                    <EyeIcon className="h-5 w-5 text-gray-400" />
-                  )}
-                </button>
-              </div>
-            </div>
-
-            {!isLogin && (
-              <div>
-                <label htmlFor="role" className="block text-sm font-medium text-gray-700 mb-2">
-                  Role
-                </label>
-                <select
-                  id="role"
-                  name="role"
-                  value={formData.role}
-                  onChange={handleChange}
-                  className="form-select"
-                >
-                  <option value="business_user">Business User</option>
-                  <option value="admin">Administrator</option>
-                </select>
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full btn-primary flex justify-center items-center"
-            >
-              {loading ? (
-                <LoadingSpinner size="small" color="white" />
-              ) : (
-                isLogin ? 'Sign in' : 'Create account'
-              )}
-            </button>
-
-            <div className="text-center">
               <button
                 type="button"
-                onClick={() => setIsLogin(!isLogin)}
-                className="text-sm text-blue-600 hover:text-blue-500 font-medium"
+                className="absolute inset-y-0 right-0 pr-3 flex items-center"
+                onClick={() => setShowPassword(!showPassword)}
               >
-                {isLogin 
-                  ? "Don't have an account? Sign up" 
-                  : "Already have an account? Sign in"
-                }
+                {showPassword ? (
+                  <EyeSlashIcon className="h-5 w-5 text-gray-400" />
+                ) : (
+                  <EyeIcon className="h-5 w-5 text-gray-400" />
+                )}
               </button>
             </div>
-          </form>
+            {errors.password && (
+              <p className="mt-1 text-sm text-red-600">{errors.password}</p>
+            )}
+          </div>
+
+          {/* Submit Error */}
+          {errors.submit && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+              <p className="text-sm text-red-600">{errors.submit}</p>
+            </div>
+          )}
+
+          {/* Submit Button */}
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+          >
+            {loading ? (
+              <div className="flex items-center">
+                <LoadingSpinner size="sm" />
+                <span className="ml-2">Signing in...</span>
+              </div>
+            ) : (
+              'Sign in'
+            )}
+          </button>
+        </form>
+
+        {/* Footer */}
+        <div className="text-center">
+          <p className="text-xs text-gray-500">
+            Secure enterprise authentication • Role-based access control
+          </p>
         </div>
       </div>
     </div>
