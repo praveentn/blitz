@@ -40,9 +40,9 @@ api.interceptors.response.use(
   }
 );
 
-// API service object with all HTTP methods
+// API service object with structured endpoints
 export const apiService = {
-  // GET request
+  // Generic HTTP methods
   get: async (url, config = {}) => {
     try {
       const response = await api.get(url, config);
@@ -53,7 +53,6 @@ export const apiService = {
     }
   },
 
-  // POST request
   post: async (url, data = {}, config = {}) => {
     try {
       const response = await api.post(url, data, config);
@@ -64,7 +63,6 @@ export const apiService = {
     }
   },
 
-  // PUT request
   put: async (url, data = {}, config = {}) => {
     try {
       const response = await api.put(url, data, config);
@@ -75,7 +73,6 @@ export const apiService = {
     }
   },
 
-  // DELETE request
   delete: async (url, config = {}) => {
     try {
       const response = await api.delete(url, config);
@@ -86,7 +83,6 @@ export const apiService = {
     }
   },
 
-  // PATCH request
   patch: async (url, data = {}, config = {}) => {
     try {
       const response = await api.patch(url, data, config);
@@ -95,14 +91,162 @@ export const apiService = {
       console.error('API PATCH Error:', error);
       throw error;
     }
+  },
+
+  // Structured API endpoints
+  auth: {
+    login: async (email, password) => {
+      const response = await api.post('/auth/login', { email, password });
+      return response;
+    },
+    register: async (userData) => {
+      const response = await api.post('/auth/register', userData);
+      return response;
+    }
+  },
+
+  dashboard: {
+    getStats: async () => {
+      const response = await api.get('/dashboard/stats');
+      return response;
+    }
+  },
+
+  models: {
+    list: async () => {
+      const response = await api.get('/models');
+      return response;
+    },
+    create: async (data) => {
+      const response = await api.post('/models', data);
+      return response;
+    },
+    update: async (id, data) => {
+      const response = await api.put(`/models/${id}`, data);
+      return response;
+    },
+    delete: async (id) => {
+      const response = await api.delete(`/models/${id}`);
+      return response;
+    }
+  },
+
+  prompts: {
+    list: async () => {
+      const response = await api.get('/prompts');
+      return response;
+    },
+    create: async (data) => {
+      const response = await api.post('/prompts', data);
+      return response;
+    },
+    update: async (id, data) => {
+      const response = await api.put(`/prompts/${id}`, data);
+      return response;
+    },
+    delete: async (id) => {
+      const response = await api.delete(`/prompts/${id}`);
+      return response;
+    }
+  },
+
+  tools: {
+    list: async () => {
+      const response = await api.get('/tools');
+      return response;
+    },
+    create: async (data) => {
+      const response = await api.post('/tools', data);
+      return response;
+    },
+    update: async (id, data) => {
+      const response = await api.put(`/tools/${id}`, data);
+      return response;
+    },
+    delete: async (id) => {
+      const response = await api.delete(`/tools/${id}`);
+      return response;
+    }
+  },
+
+  agents: {
+    list: async () => {
+      const response = await api.get('/agents');
+      return response;
+    },
+    create: async (data) => {
+      const response = await api.post('/agents', data);
+      return response;
+    },
+    update: async (id, data) => {
+      const response = await api.put(`/agents/${id}`, data);
+      return response;
+    },
+    delete: async (id) => {
+      const response = await api.delete(`/agents/${id}`);
+      return response;
+    }
+  },
+
+  workflows: {
+    list: async () => {
+      const response = await api.get('/workflows');
+      return response;
+    },
+    create: async (data) => {
+      const response = await api.post('/workflows', data);
+      return response;
+    },
+    update: async (id, data) => {
+      const response = await api.put(`/workflows/${id}`, data);
+      return response;
+    },
+    delete: async (id) => {
+      const response = await api.delete(`/workflows/${id}`);
+      return response;
+    }
+  },
+
+  executions: {
+    list: async () => {
+      const response = await api.get('/executions');
+      return response;
+    },
+    create: async (data) => {
+      const response = await api.post('/executions', data);
+      return response;
+    },
+    get: async (id) => {
+      const response = await api.get(`/executions/${id}`);
+      return response;
+    }
+  },
+
+  admin: {
+    executeSQL: async (query, page = 1, pageSize = 50) => {
+      const response = await api.post('/admin/sql', { 
+        query, 
+        page, 
+        page_size: pageSize 
+      });
+      return response;
+    },
+    getTables: async () => {
+      const response = await api.get('/admin/tables');
+      return response;
+    },
+    getTableSchema: async (tableName) => {
+      const response = await api.get(`/admin/tables/${tableName}/schema`);
+      return response;
+    }
   }
 };
 
 // Helper functions for consistent error/success handling
-export const handleApiError = (error) => {
+export const handleApiError = (error, defaultMessage = 'An unexpected error occurred') => {
   console.error('API Error:', error);
   
-  let message = 'An unexpected error occurred';
+  let message = defaultMessage;
   
   if (error.response) {
     // Server responded with error status

@@ -1,5 +1,5 @@
 // src/App.js
-import React from 'react';
+import React, { Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider, useAuth } from './services/auth';
@@ -7,16 +7,28 @@ import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import AdminPage from './pages/AdminPage';
+import LoadingSpinner from './components/LoadingSpinner';
 import './App.css';
 
-// Import page components - using individual imports to avoid issues
+// Fixed lazy loading - ensure correct imports and exports
 const ModelsPage = React.lazy(() => import('./pages/ModelsPage'));
-const PromptsPage = React.lazy(() => import('./pages/PromptsPage').then(module => ({ default: module.PromptsPage })));
-const ToolsPage = React.lazy(() => import('./pages/ToolsPage').then(module => ({ default: module.ToolsPage })));
-const AgentsPage = React.lazy(() => import('./pages/AgentsPage').then(module => ({ default: module.AgentsPage })));
-const WorkflowsPage = React.lazy(() => import('./pages/WorkflowsPage').then(module => ({ default: module.WorkflowsPage })));
-const CostTrackerPage = React.lazy(() => import('./pages/CostTrackerPage').then(module => ({ default: module.CostTrackerPage })));
-const ExecutionMonitorPage = React.lazy(() => import('./pages/ExecutionMonitorPage').then(module => ({ default: module.ExecutionMonitorPage })));
+const PromptsPage = React.lazy(() => import('./pages/PromptsPage'));
+const ToolsPage = React.lazy(() => import('./pages/ToolsPage'));
+const AgentsPage = React.lazy(() => import('./pages/AgentsPage'));
+const WorkflowsPage = React.lazy(() => import('./pages/WorkflowsPage'));
+const CostTrackerPage = React.lazy(() => import('./pages/CostTrackerPage'));
+const ExecutionMonitorPage = React.lazy(() => import('./pages/ExecutionMonitorPage'));
+
+// Loading wrapper for lazy components
+const LazyWrapper = ({ children }) => (
+  <Suspense fallback={
+    <div className="flex items-center justify-center h-64">
+      <LoadingSpinner size="lg" />
+    </div>
+  }>
+    {children}
+  </Suspense>
+);
 
 // Protected Route Component
 const ProtectedRoute = ({ children, adminOnly = false }) => {
@@ -38,14 +50,22 @@ const ProtectedRoute = ({ children, adminOnly = false }) => {
   }
   
   if (adminOnly && user.role !== 'admin') {
-    return <Navigate to="/dashboard" replace />;
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <div className="text-red-600 text-6xl mb-4">🚫</div>
+          <h1 className="text-2xl font-bold text-gray-900 mb-2">Access Denied</h1>
+          <p className="text-gray-600">You need admin privileges to access this page.</p>
+        </div>
+      </div>
+    );
   }
   
-  return children;
+  return <Layout>{children}</Layout>;
 };
 
-// Public Route Component (redirects to dashboard if logged in)
-const PublicRoute = ({ children }) => {
+// Main App Component
+const AppContent = () => {
   const { user, loading } = useAuth();
   
   if (loading) {
@@ -53,140 +73,143 @@ const PublicRoute = ({ children }) => {
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center">
           <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-blue-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Loading...</p>
+          <p className="mt-4 text-gray-600">Loading application...</p>
         </div>
       </div>
     );
   }
   
-  if (user) {
-    return <Navigate to="/dashboard" replace />;
-  }
-  
-  return children;
+  return (
+    <Routes>
+      {/* Public Routes */}
+      <Route 
+        path="/login" 
+        element={user ? <Navigate to="/dashboard" replace /> : <LoginPage />} 
+      />
+      
+      {/* Protected Routes */}
+      <Route path="/" element={<ProtectedRoute><Navigate to="/dashboard" replace /></ProtectedRoute>} />
+      
+      <Route 
+        path="/dashboard" 
+        element={
+          <ProtectedRoute>
+            <DashboardPage />
+          </ProtectedRoute>
+        } 
+      />
+      
+      <Route 
+        path="/models" 
+        element={
+          <ProtectedRoute>
+            <LazyWrapper>
+              <ModelsPage />
+            </LazyWrapper>
+          </ProtectedRoute>
+        } 
+      />
+      
+      <Route 
+        path="/prompts" 
+        element={
+          <ProtectedRoute>
+            <LazyWrapper>
+              <PromptsPage />
+            </LazyWrapper>
+          </ProtectedRoute>
+        } 
+      />
+      
+      <Route 
+        path="/tools" 
+        element={
+          <ProtectedRoute>
+            <LazyWrapper>
+              <ToolsPage />
+            </LazyWrapper>
+          </ProtectedRoute>
+        } 
+      />
+      
+      <Route 
+        path="/agents" 
+        element={
+          <ProtectedRoute>
+            <LazyWrapper>
+              <AgentsPage />
+            </LazyWrapper>
+          </ProtectedRoute>
+        } 
+      />
+      
+      <Route 
+        path="/workflows" 
+        element={
+          <ProtectedRoute>
+            <LazyWrapper>
+              <WorkflowsPage />
+            </LazyWrapper>
+          </ProtectedRoute>
+        } 
+      />
+      
+      <Route 
+        path="/executions" 
+        element={
+          <ProtectedRoute>
+            <LazyWrapper>
+              <ExecutionMonitorPage />
+            </LazyWrapper>
+          </ProtectedRoute>
+        } 
+      />
+      
+      <Route 
+        path="/costs" 
+        element={
+          <ProtectedRoute>
+            <LazyWrapper>
+              <CostTrackerPage />
+            </LazyWrapper>
+          </ProtectedRoute>
+        } 
+      />
+      
+      <Route 
+        path="/admin" 
+        element={
+          <ProtectedRoute adminOnly={true}>
+            <AdminPage />
+          </ProtectedRoute>
+        } 
+      />
+      
+      {/* Catch all route */}
+      <Route 
+        path="*" 
+        element={
+          <div className="min-h-screen flex items-center justify-center bg-gray-50">
+            <div className="text-center">
+              <h1 className="text-4xl font-bold text-gray-900 mb-2">404</h1>
+              <p className="text-gray-600 mb-4">Page not found</p>
+              <Navigate to="/dashboard" replace />
+            </div>
+          </div>
+        } 
+      />
+    </Routes>
+  );
 };
 
-// Lazy Loading Wrapper
-const LazyWrapper = ({ children }) => (
-  <React.Suspense fallback={
-    <div className="flex items-center justify-center p-8">
-      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-    </div>
-  }>
-    {children}
-  </React.Suspense>
-);
-
-function App() {
+// Root App component with providers
+const App = () => {
   return (
-    <AuthProvider>
-      <Router>
+    <Router>
+      <AuthProvider>
         <div className="App">
-          <Routes>
-            {/* Public Routes */}
-            <Route 
-              path="/login" 
-              element={
-                <PublicRoute>
-                  <LoginPage />
-                </PublicRoute>
-              } 
-            />
-            
-            {/* Protected Routes with Layout */}
-            <Route 
-              path="/*" 
-              element={
-                <ProtectedRoute>
-                  <Layout>
-                    <Routes>
-                      <Route path="/dashboard" element={<DashboardPage />} />
-                      
-                      <Route 
-                        path="/models" 
-                        element={
-                          <LazyWrapper>
-                            <ModelsPage />
-                          </LazyWrapper>
-                        } 
-                      />
-                      
-                      <Route 
-                        path="/prompts" 
-                        element={
-                          <LazyWrapper>
-                            <PromptsPage />
-                          </LazyWrapper>
-                        } 
-                      />
-                      
-                      <Route 
-                        path="/tools" 
-                        element={
-                          <LazyWrapper>
-                            <ToolsPage />
-                          </LazyWrapper>
-                        } 
-                      />
-                      
-                      <Route 
-                        path="/agents" 
-                        element={
-                          <LazyWrapper>
-                            <AgentsPage />
-                          </LazyWrapper>
-                        } 
-                      />
-                      
-                      <Route 
-                        path="/workflows" 
-                        element={
-                          <LazyWrapper>
-                            <WorkflowsPage />
-                          </LazyWrapper>
-                        } 
-                      />
-                      
-                      <Route 
-                        path="/executions" 
-                        element={
-                          <LazyWrapper>
-                            <ExecutionMonitorPage />
-                          </LazyWrapper>
-                        } 
-                      />
-                      
-                      <Route 
-                        path="/costs" 
-                        element={
-                          <LazyWrapper>
-                            <CostTrackerPage />
-                          </LazyWrapper>
-                        } 
-                      />
-                      
-                      {/* Admin Routes */}
-                      <Route 
-                        path="/admin" 
-                        element={
-                          <ProtectedRoute adminOnly={true}>
-                            <AdminPage />
-                          </ProtectedRoute>
-                        } 
-                      />
-                      
-                      {/* Default redirect */}
-                      <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                      <Route path="*" element={<Navigate to="/dashboard" replace />} />
-                    </Routes>
-                  </Layout>
-                </ProtectedRoute>
-              } 
-            />
-          </Routes>
-          
-          {/* Toast notifications */}
-          <Toaster
+          <AppContent />
+          <Toaster 
             position="top-right"
             toastOptions={{
               duration: 4000,
@@ -209,9 +232,9 @@ function App() {
             }}
           />
         </div>
-      </Router>
-    </AuthProvider>
+      </AuthProvider>
+    </Router>
   );
-}
+};
 
 export default App;

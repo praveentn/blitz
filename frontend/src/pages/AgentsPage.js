@@ -6,8 +6,8 @@ import {
   TrashIcon,
   UserIcon,
   CpuChipIcon,
-  DocumentTextIcon,
   WrenchScrewdriverIcon,
+  DocumentTextIcon,
 } from '@heroicons/react/24/outline';
 import { apiService, handleApiError } from '../services/api';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -25,28 +25,30 @@ const AgentsPage = () => {
     item: null
   });
 
-  const agentFields = [
+  // Dynamic agent fields that will be populated with model/prompt options
+  const [agentFields, setAgentFields] = useState([
     {
       key: 'name',
       label: 'Agent Name',
       type: 'text',
       required: true,
-      placeholder: 'e.g., Research Assistant',
-      description: 'Unique name for this agent'
+      placeholder: 'e.g., Risk Analysis Agent',
+      description: 'Descriptive name for this agent'
     },
     {
       key: 'description',
       label: 'Description',
       type: 'textarea',
+      required: true,
       placeholder: 'Describe what this agent does...',
-      description: 'Brief description of the agent\'s purpose'
+      description: 'Clear description of the agent\'s purpose and capabilities'
     },
     {
       key: 'model_id',
       label: 'Model',
       type: 'select',
       required: true,
-      options: [], // Will be populated dynamically
+      options: [],
       description: 'LLM model this agent will use'
     },
     {
@@ -54,24 +56,39 @@ const AgentsPage = () => {
       label: 'Prompt Template',
       type: 'select',
       required: true,
-      options: [], // Will be populated dynamically
-      description: 'Prompt template defining agent behavior'
+      options: [],
+      description: 'Prompt template that defines agent behavior'
     },
     {
       key: 'parameters',
       label: 'Agent Parameters',
       type: 'json',
-      default: '{\n  "temperature": 0.7,\n  "max_tokens": 2000,\n  "timeout": 300\n}',
+      default: JSON.stringify({
+        temperature: 0.7,
+        max_tokens: 1000,
+        max_iterations: 5
+      }, null, 2),
       description: 'JSON configuration for agent parameters'
     },
     {
       key: 'memory_config',
       label: 'Memory Configuration',
       type: 'json',
-      default: '{\n  "type": "conversation",\n  "max_messages": 10\n}',
+      default: JSON.stringify({
+        type: "buffer",
+        max_messages: 10,
+        include_context: true
+      }, null, 2),
       description: 'Memory settings for conversation history'
+    },
+    {
+      key: 'is_active',
+      label: 'Active',
+      type: 'checkbox',
+      default: true,
+      description: 'Whether this agent is active and available for use'
     }
-  ];
+  ]);
 
   useEffect(() => {
     loadData();
@@ -81,12 +98,12 @@ const AgentsPage = () => {
     try {
       setLoading(true);
       
-      // Load all necessary data
+      // Load all required data in parallel
       const [agentsRes, modelsRes, promptsRes, toolsRes] = await Promise.all([
-        apiService.get('/agents'),
-        apiService.get('/models'),
-        apiService.get('/prompts'),
-        apiService.get('/tools')
+        apiService.agents.list(),
+        apiService.models.list(),
+        apiService.prompts.list(),
+        apiService.tools.list()
       ]);
       
       setAgents(agentsRes.data || []);
@@ -94,22 +111,36 @@ const AgentsPage = () => {
       setPrompts(promptsRes.data || []);
       setTools(toolsRes.data || []);
       
-      // Update field options
-      agentFields[2].options = [
-        { value: '', label: 'Select Model' },
-        ...(modelsRes.data || []).map(model => ({
-          value: model.id,
-          label: model.name
-        }))
-      ];
-      
-      agentFields[3].options = [
-        { value: '', label: 'Select Prompt' },
-        ...(promptsRes.data || []).map(prompt => ({
-          value: prompt.id,
-          label: prompt.name
-        }))
-      ];
+      // Update field options dynamically
+      setAgentFields(prevFields => {
+        const updatedFields = [...prevFields];
+        
+        // Update model options
+        const modelFieldIndex = updatedFields.findIndex(f => f.key === 'model_id');
+        if (modelFieldIndex !== -1) {
+          updatedFields[modelFieldIndex].options = [
+            { value: '', label: 'Select Model' },
+            ...(modelsRes.data || []).map(model => ({
+              value: model.id,
+              label: model.name
+            }))
+          ];
+        }
+        
+        // Update prompt options
+        const promptFieldIndex = updatedFields.findIndex(f => f.key === 'prompt_id');
+        if (promptFieldIndex !== -1) {
+          updatedFields[promptFieldIndex].options = [
+            { value: '', label: 'Select Prompt' },
+            ...(promptsRes.data || []).map(prompt => ({
+              value: prompt.id,
+              label: prompt.name
+            }))
+          ];
+        }
+        
+        return updatedFields;
+      });
       
     } catch (error) {
       handleApiError(error);
@@ -139,6 +170,12 @@ const AgentsPage = () => {
   const getPromptName = (promptId) => {
     const prompt = prompts.find(p => p.id === promptId);
     return prompt ? prompt.name : 'Unknown Prompt';
+  };
+
+  const getAgentTools = (agentId) => {
+    // This would typically come from the agent data with tool relationships
+    // For now, we'll return a placeholder
+    return tools.filter(tool => tool.is_active).slice(0, 3);
   };
 
   if (loading) {
@@ -180,81 +217,91 @@ const AgentsPage = () => {
           </div>
         </div>
       ) : (
-        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {agents.map((agent) => (
-            <div key={agent.id} className="card hover:shadow-lg transition-shadow">
+            <div key={agent.id} className="card">
               <div className="card-header">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center">
-                    <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center mr-3">
-                      <UserIcon className="h-6 w-6 text-blue-600" />
+                    <div className="p-2 bg-blue-100 rounded-lg">
+                      <UserIcon className="h-5 w-5 text-blue-600" />
                     </div>
-                    <div>
-                      <h3 className="text-lg font-medium text-gray-900">{agent.name}</h3>
-                      <p className="text-sm text-gray-500">Agent</p>
-                    </div>
+                    <h3 className="ml-3 text-lg font-medium text-gray-900">{agent.name}</h3>
                   </div>
-                  <div className="flex space-x-1">
+                  <div className="flex items-center space-x-2">
                     <button
                       onClick={() => openModal('edit', agent)}
-                      className="p-2 text-gray-400 hover:text-blue-600 transition-colors"
+                      className="text-gray-400 hover:text-blue-600"
                       title="Edit agent"
                     >
-                      <PencilIcon className="h-4 w-4" />
+                      <PencilIcon className="h-5 w-5" />
                     </button>
                     <button
                       onClick={() => openModal('delete', agent)}
-                      className="p-2 text-gray-400 hover:text-red-600 transition-colors"
+                      className="text-gray-400 hover:text-red-600"
                       title="Delete agent"
                     >
-                      <TrashIcon className="h-4 w-4" />
+                      <TrashIcon className="h-5 w-5" />
                     </button>
                   </div>
                 </div>
               </div>
               
               <div className="card-body">
+                <p className="text-sm text-gray-600 mb-4 line-clamp-2">
+                  {agent.description}
+                </p>
+                
                 <div className="space-y-3">
-                  {agent.description && (
-                    <div>
-                      <p className="text-sm text-gray-700">{agent.description}</p>
-                    </div>
-                  )}
+                  <div className="flex items-center text-sm">
+                    <CpuChipIcon className="h-4 w-4 text-gray-400 mr-2" />
+                    <span className="text-gray-500 w-16">Model:</span>
+                    <span className="font-medium text-gray-900">{getModelName(agent.model_id)}</span>
+                  </div>
                   
-                  <div className="space-y-2">
-                    <div className="flex items-center text-sm">
-                      <CpuChipIcon className="h-4 w-4 text-gray-400 mr-2" />
-                      <span className="text-gray-500">Model:</span>
-                      <span className="ml-2 font-medium">{getModelName(agent.model_id)}</span>
+                  <div className="flex items-center text-sm">
+                    <DocumentTextIcon className="h-4 w-4 text-gray-400 mr-2" />
+                    <span className="text-gray-500 w-16">Prompt:</span>
+                    <span className="font-medium text-gray-900 truncate">{getPromptName(agent.prompt_id)}</span>
+                  </div>
+                  
+                  <div className="flex items-start text-sm">
+                    <WrenchScrewdriverIcon className="h-4 w-4 text-gray-400 mr-2 mt-0.5" />
+                    <span className="text-gray-500 w-16">Tools:</span>
+                    <div className="flex-1">
+                      {getAgentTools(agent.id).length > 0 ? (
+                        <div className="space-y-1">
+                          {getAgentTools(agent.id).slice(0, 2).map((tool) => (
+                            <div key={tool.id} className="text-xs bg-gray-100 px-2 py-1 rounded">
+                              {tool.name}
+                            </div>
+                          ))}
+                          {getAgentTools(agent.id).length > 2 && (
+                            <div className="text-xs text-gray-500">
+                              +{getAgentTools(agent.id).length - 2} more
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-gray-500">No tools configured</span>
+                      )}
                     </div>
-                    
-                    <div className="flex items-center text-sm">
-                      <DocumentTextIcon className="h-4 w-4 text-gray-400 mr-2" />
-                      <span className="text-gray-500">Prompt:</span>
-                      <span className="ml-2 font-medium">{getPromptName(agent.prompt_id)}</span>
-                    </div>
-                    
-                    {agent.tools && agent.tools.length > 0 && (
-                      <div className="flex items-center text-sm">
-                        <WrenchScrewdriverIcon className="h-4 w-4 text-gray-400 mr-2" />
-                        <span className="text-gray-500">Tools:</span>
-                        <span className="ml-2 font-medium">{agent.tools.length} configured</span>
-                      </div>
-                    )}
                   </div>
                   
                   {agent.parameters && Object.keys(agent.parameters).length > 0 && (
-                    <div>
-                      <span className="text-sm font-medium text-gray-500">Parameters:</span>
-                      <div className="mt-1 space-y-1">
-                        {Object.entries(agent.parameters).slice(0, 2).map(([key, value]) => (
+                    <div className="pt-2 border-t border-gray-100">
+                      <span className="text-sm font-medium text-gray-500 mb-2 block">Parameters:</span>
+                      <div className="space-y-1">
+                        {Object.entries(agent.parameters).slice(0, 3).map(([key, value]) => (
                           <div key={key} className="flex justify-between text-xs">
-                            <span className="text-gray-500">{key}:</span>
-                            <span className="text-gray-900 font-mono">{String(value)}</span>
+                            <span className="text-gray-500 capitalize">{key}:</span>
+                            <span className="text-gray-900 font-mono">
+                              {typeof value === 'object' ? JSON.stringify(value) : String(value)}
+                            </span>
                           </div>
                         ))}
-                        {Object.keys(agent.parameters).length > 2 && (
-                          <p className="text-xs text-gray-500">+{Object.keys(agent.parameters).length - 2} more...</p>
+                        {Object.keys(agent.parameters).length > 3 && (
+                          <p className="text-xs text-gray-500">+{Object.keys(agent.parameters).length - 3} more...</p>
                         )}
                       </div>
                     </div>
