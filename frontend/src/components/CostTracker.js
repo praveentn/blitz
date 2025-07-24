@@ -3,332 +3,425 @@ import React, { useState, useEffect } from 'react';
 import {
   CurrencyDollarIcon,
   ChartBarIcon,
-  CalendarIcon,
   ExclamationTriangleIcon,
-  ArrowTrendingUpIcon,
-  ArrowTrendingDownIcon,
+  InformationCircleIcon,
+  CalendarIcon,
+  UserIcon,
+  CpuChipIcon,
+  ClockIcon,
 } from '@heroicons/react/24/outline';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
-import { format, subDays, startOfDay } from 'date-fns';
 import { apiService, handleApiError } from '../services/api';
-import LoadingSpinner, { CardSkeleton } from './LoadingSpinner';
-import { useAuth } from '../services/auth';
+import LoadingSpinner from './LoadingSpinner';
 
 const CostTracker = () => {
-  const [costs, setCosts] = useState(null);
+  const [costData, setCostData] = useState(null);
+  const [timeframe, setTimeframe] = useState('week'); // 'day', 'week', 'month', 'year'
   const [loading, setLoading] = useState(true);
-  const [timeRange, setTimeRange] = useState(30); // days
-  const { user } = useAuth();
+  const [userCosts, setUserCosts] = useState([]);
+  const [modelCosts, setModelCosts] = useState([]);
 
   useEffect(() => {
     loadCostData();
-  }, [timeRange]);
+  }, [timeframe]);
 
   const loadCostData = async () => {
-    setLoading(true);
     try {
-      const response = await apiService.costs.getUserCosts();
-      setCosts(response.data);
+      setLoading(true);
+      
+      // Load overall cost data
+      const costResponse = await apiService.get(`/costs/analytics?timeframe=${timeframe}`);
+      setCostData(costResponse.data);
+      
+      // Load user-specific costs
+      const userCostResponse = await apiService.get(`/costs/by-user?timeframe=${timeframe}`);
+      setUserCosts(userCostResponse.data || []);
+      
+      // Load model-specific costs
+      const modelCostResponse = await apiService.get(`/costs/by-model?timeframe=${timeframe}`);
+      setModelCosts(modelCostResponse.data || []);
+      
     } catch (error) {
-      handleApiError(error, 'Failed to load cost data');
+      console.error('Error loading cost data:', error);
+      handleApiError(error);
+      setCostData(null);
+      setUserCosts([]);
+      setModelCosts([]);
     } finally {
       setLoading(false);
     }
   };
 
-  // Generate mock data for charts (replace with real API data)
-  const generateChartData = () => {
-    const data = [];
-    for (let i = timeRange - 1; i >= 0; i--) {
-      const date = startOfDay(subDays(new Date(), i));
-      data.push({
-        date: format(date, 'MMM dd'),
-        cost: Math.random() * 5 + 1, // Mock cost data
-        executions: Math.floor(Math.random() * 20) + 5,
-      });
-    }
-    return data;
+  const formatCurrency = (amount) => {
+    if (amount === null || amount === undefined) return '$0.00';
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 4,
+      maximumFractionDigits: 4
+    }).format(amount);
   };
 
-  const chartData = generateChartData();
+  const formatTokens = (tokens) => {
+    if (!tokens) return '0';
+    if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(1)}M`;
+    if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}K`;
+    return tokens.toLocaleString();
+  };
+
+  const getCostTrend = (current, previous) => {
+    if (!previous || previous === 0) return null;
+    const change = ((current - previous) / previous) * 100;
+    return {
+      value: Math.abs(change).toFixed(1),
+      direction: change >= 0 ? 'up' : 'down',
+      color: change >= 0 ? 'text-red-600' : 'text-green-600'
+    };
+  };
+
+  const getUsageLevel = (current, limit) => {
+    if (!limit) return 'normal';
+    const percentage = (current / limit) * 100;
+    if (percentage >= 90) return 'critical';
+    if (percentage >= 75) return 'warning';
+    return 'normal';
+  };
+
+  const getUsageColor = (level) => {
+    switch (level) {
+      case 'critical':
+        return 'bg-red-500';
+      case 'warning':
+        return 'bg-yellow-500';
+      default:
+        return 'bg-green-500';
+    }
+  };
 
   if (loading) {
     return (
-      <div className="p-6 space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-          {Array.from({ length: 4 }, (_, i) => (
-            <CardSkeleton key={i} />
-          ))}
-        </div>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <CardSkeleton />
-          <CardSkeleton />
+      <div className="flex items-center justify-center h-64">
+        <LoadingSpinner size="lg" />
+      </div>
+    );
+  }
+
+  if (!costData) {
+    return (
+      <div className="p-6">
+        <div className="text-center py-12">
+          <ExclamationTriangleIcon className="mx-auto h-12 w-12 text-gray-400" />
+          <h3 className="mt-2 text-sm font-medium text-gray-900">Cost data unavailable</h3>
+          <p className="mt-1 text-sm text-gray-500">Unable to load cost tracking information.</p>
         </div>
       </div>
     );
   }
 
-  const costCards = [
-    {
-      name: 'Total Cost',
-      value: `$${costs?.total_cost?.toFixed(2) || '0.00'}`,
-      change: '+12.3%',
-      trend: 'up',
-      icon: CurrencyDollarIcon,
-      color: 'blue',
-    },
-    {
-      name: 'This Month',
-      value: `$${costs?.recent_cost?.toFixed(2) || '0.00'}`,
-      change: '+8.1%',
-      trend: 'up',
-      icon: CalendarIcon,
-      color: 'green',
-    },
-    {
-      name: 'Recent Executions',
-      value: costs?.recent_executions || '0',
-      change: '+24.5%',
-      trend: 'up',
-      icon: ChartBarIcon,
-      color: 'purple',
-    },
-    {
-      name: 'Budget Used',
-      value: `${((costs?.total_cost || 0) / (user?.cost_limit || 100) * 100).toFixed(1)}%`,
-      change: costs?.total_cost > (user?.cost_limit * 0.8) ? 'Warning' : 'Good',
-      trend: costs?.total_cost > (user?.cost_limit * 0.8) ? 'up' : 'down',
-      icon: ExclamationTriangleIcon,
-      color: costs?.total_cost > (user?.cost_limit * 0.8) ? 'red' : 'green',
-    },
-  ];
+  const usageLevel = getUsageLevel(costData.current_period.total_cost, costData.cost_limit);
+  const usagePercentage = costData.cost_limit 
+    ? Math.min((costData.current_period.total_cost / costData.cost_limit) * 100, 100)
+    : 0;
 
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Cost Tracking</h1>
-          <p className="text-gray-600">Monitor your AI usage costs and budget</p>
+        <div className="flex items-center">
+          <CurrencyDollarIcon className="h-8 w-8 text-green-600 mr-3" />
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Cost Tracking</h1>
+            <p className="text-gray-600">Monitor LLM usage costs and spending patterns</p>
+          </div>
         </div>
-        <div className="flex items-center space-x-4">
+        
+        <div className="flex items-center space-x-3">
           <select
-            value={timeRange}
-            onChange={(e) => setTimeRange(parseInt(e.target.value))}
+            value={timeframe}
+            onChange={(e) => setTimeframe(e.target.value)}
             className="form-select"
           >
-            <option value={7}>Last 7 days</option>
-            <option value={30}>Last 30 days</option>
-            <option value={90}>Last 90 days</option>
+            <option value="day">Today</option>
+            <option value="week">This Week</option>
+            <option value="month">This Month</option>
+            <option value="year">This Year</option>
           </select>
         </div>
       </div>
 
-      {/* Cost Overview Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {costCards.map((card) => {
-          const Icon = card.icon;
-          const TrendIcon = card.trend === 'up' ? ArrowTrendingUpIcon : ArrowTrendingDownIcon;
-          
-          const colorClasses = {
-            blue: 'text-blue-600 bg-blue-100',
-            green: 'text-green-600 bg-green-100',
-            purple: 'text-purple-600 bg-purple-100',
-            red: 'text-red-600 bg-red-100',
-          };
-
-          const trendColors = {
-            up: card.color === 'red' ? 'text-red-600' : 'text-green-600',
-            down: 'text-green-600',
-          };
-
-          return (
-            <div key={card.name} className="card">
-              <div className="card-body">
-                <div className="flex items-center">
-                  <div className={`p-3 rounded-lg ${colorClasses[card.color]}`}>
-                    <Icon className="h-6 w-6" />
-                  </div>
-                  <div className="ml-4 flex-1">
-                    <p className="text-sm font-medium text-gray-600">{card.name}</p>
-                    <p className="text-2xl font-bold text-gray-900">{card.value}</p>
-                    <div className="flex items-center mt-1">
-                      <TrendIcon className={`h-4 w-4 ${trendColors[card.trend]}`} />
-                      <span className={`text-sm ml-1 ${trendColors[card.trend]}`}>
-                        {card.change}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Budget Alert */}
-      {costs?.total_cost > (user?.cost_limit * 0.8) && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-          <div className="flex items-center">
-            <ExclamationTriangleIcon className="h-5 w-5 text-yellow-500 mr-3" />
+      {/* Cost Limit Alert */}
+      {usageLevel !== 'normal' && (
+        <div className={`p-4 rounded-lg border ${
+          usageLevel === 'critical' 
+            ? 'bg-red-50 border-red-200' 
+            : 'bg-yellow-50 border-yellow-200'
+        }`}>
+          <div className="flex items-start">
+            <ExclamationTriangleIcon className={`h-5 w-5 mt-0.5 mr-3 ${
+              usageLevel === 'critical' ? 'text-red-600' : 'text-yellow-600'
+            }`} />
             <div>
-              <h3 className="text-sm font-medium text-yellow-800">Budget Warning</h3>
-              <p className="text-sm text-yellow-700 mt-1">
-                You've used {((costs?.total_cost || 0) / (user?.cost_limit || 100) * 100).toFixed(1)}% 
-                of your ${user?.cost_limit || 100} budget limit.
+              <h3 className={`text-sm font-medium ${
+                usageLevel === 'critical' ? 'text-red-800' : 'text-yellow-800'
+              }`}>
+                {usageLevel === 'critical' ? 'Cost Limit Nearly Reached' : 'High Usage Warning'}
+              </h3>
+              <p className={`text-sm ${
+                usageLevel === 'critical' ? 'text-red-700' : 'text-yellow-700'
+              }`}>
+                You've used {usagePercentage.toFixed(1)}% of your cost limit this period.
+                {usageLevel === 'critical' && ' Consider reviewing your usage or increasing your limit.'}
               </p>
             </div>
           </div>
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Cost Trend Chart */}
+      {/* Overview Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="card">
-          <div className="card-header">
-            <h3 className="text-lg font-medium text-gray-900">Cost Trend</h3>
-          </div>
           <div className="card-body">
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="date" />
-                <YAxis />
-                <Tooltip 
-                  formatter={(value) => [`$${value.toFixed(2)}`, 'Cost']}
-                  labelStyle={{ color: '#374151' }}
-                />
-                <Line 
-                  type="monotone" 
-                  dataKey="cost" 
-                  stroke="#3b82f6" 
-                  strokeWidth={2}
-                  dot={{ fill: '#3b82f6', strokeWidth: 2, r: 4 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <CurrencyDollarIcon className="h-8 w-8 text-green-600" />
+              </div>
+              <div className="ml-4">
+                <p className="text-sm font-medium text-gray-500">Total Cost</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {formatCurrency(costData.current_period.total_cost)}
+                </p>
+                {costData.previous_period && (
+                  <div className="flex items-center mt-1">
+                    {(() => {
+                      const trend = getCostTrend(
+                        costData.current_period.total_cost,
+                        costData.previous_period.total_cost
+                      );
+                      return trend ? (
+                        <span className={`text-xs ${trend.color}`}>
+                          {trend.direction === 'up' ? '↗' : '↘'} {trend.value}% vs last period
+                        </span>
+                      ) : null;
+                    })()}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Execution Volume */}
         <div className="card">
-          <div className="card-header">
-            <h3 className="text-lg font-medium text-gray-900">Execution Volume</h3>
-          </div>
           <div className="card-body">
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="date" />
-                <YAxis />
-                <Tooltip 
-                  formatter={(value) => [value, 'Executions']}
-                  labelStyle={{ color: '#374151' }}
-                />
-                <Bar dataKey="executions" fill="#10b981" />
-              </BarChart>
-            </ResponsiveContainer>
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <ChartBarIcon className="h-8 w-8 text-blue-600" />
+              </div>
+              <div className="ml-4">
+                <p className="text-sm font-medium text-gray-500">Total Tokens</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {formatTokens(costData.current_period.total_tokens)}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  Avg: {formatCurrency(costData.current_period.avg_cost_per_token)}/token
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-body">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <ClockIcon className="h-8 w-8 text-purple-600" />
+              </div>
+              <div className="ml-4">
+                <p className="text-sm font-medium text-gray-500">API Calls</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {costData.current_period.total_calls?.toLocaleString() || '0'}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  Avg: {formatCurrency(costData.current_period.avg_cost_per_call)}/call
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-body">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <div className="relative w-8 h-8">
+                  <div className="w-8 h-8 bg-gray-200 rounded-full">
+                    <div 
+                      className={`h-8 rounded-full ${getUsageColor(usageLevel)}`}
+                      style={{ width: `${Math.min(usagePercentage, 100)}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="ml-4">
+                <p className="text-sm font-medium text-gray-500">Usage Limit</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {usagePercentage.toFixed(1)}%
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {formatCurrency(costData.cost_limit)} limit
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Cost Breakdown */}
+      {/* Charts Section */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Cost by Type */}
+        {/* Cost by User */}
         <div className="card">
           <div className="card-header">
-            <h3 className="text-lg font-medium text-gray-900">Cost by Type</h3>
+            <h3 className="text-lg font-medium text-gray-900 flex items-center">
+              <UserIcon className="h-5 w-5 mr-2" />
+              Cost by User
+            </h3>
           </div>
           <div className="card-body">
-            {costs?.cost_by_type && Object.keys(costs.cost_by_type).length > 0 ? (
-              <div className="space-y-4">
-                {Object.entries(costs.cost_by_type).map(([type, amount]) => (
-                  <div key={type} className="flex items-center justify-between">
-                    <div className="flex items-center">
-                      <div className="w-3 h-3 bg-blue-500 rounded-full mr-3"></div>
-                      <span className="text-sm font-medium text-gray-900 capitalize">
-                        {type.replace('_', ' ')}
-                      </span>
-                    </div>
-                    <span className="text-sm font-semibold text-gray-900">
-                      ${amount.toFixed(2)}
-                    </span>
-                  </div>
-                ))}
+            {userCosts.length === 0 ? (
+              <div className="text-center py-8">
+                <InformationCircleIcon className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+                <p className="text-gray-500">No user cost data available</p>
               </div>
             ) : (
-              <div className="text-center py-8">
-                <CurrencyDollarIcon className="mx-auto h-12 w-12 text-gray-400" />
-                <h3 className="mt-2 text-sm font-medium text-gray-900">No cost data</h3>
-                <p className="mt-1 text-sm text-gray-500">
-                  Start using the platform to see cost breakdown
-                </p>
+              <div className="space-y-3">
+                {userCosts.slice(0, 5).map((user, index) => {
+                  const maxCost = Math.max(...userCosts.map(u => u.total_cost));
+                  const percentage = maxCost > 0 ? (user.total_cost / maxCost) * 100 : 0;
+                  
+                  return (
+                    <div key={user.user_id} className="flex items-center">
+                      <div className="w-24 text-sm text-gray-600 truncate">
+                        {user.username || `User ${user.user_id}`}
+                      </div>
+                      <div className="flex-1 mx-3">
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div
+                            className="bg-blue-500 h-2 rounded-full"
+                            style={{ width: `${percentage}%` }}
+                          />
+                        </div>
+                      </div>
+                      <div className="w-20 text-sm font-medium text-gray-900 text-right">
+                        {formatCurrency(user.total_cost)}
+                      </div>
+                    </div>
+                  );
+                })}
+                {userCosts.length > 5 && (
+                  <p className="text-sm text-gray-500 text-center mt-2">
+                    +{userCosts.length - 5} more users
+                  </p>
+                )}
               </div>
             )}
           </div>
         </div>
 
-        {/* Budget Progress */}
+        {/* Cost by Model */}
         <div className="card">
           <div className="card-header">
-            <h3 className="text-lg font-medium text-gray-900">Budget Progress</h3>
+            <h3 className="text-lg font-medium text-gray-900 flex items-center">
+              <CpuChipIcon className="h-5 w-5 mr-2" />
+              Cost by Model
+            </h3>
           </div>
           <div className="card-body">
-            <div className="space-y-6">
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-gray-900">Current Usage</span>
-                  <span className="text-sm text-gray-500">
-                    ${costs?.total_cost?.toFixed(2) || '0.00'} / ${user?.cost_limit || 100}
-                  </span>
-                </div>
-                <div className="w-full bg-gray-200 rounded-full h-2">
-                  <div 
-                    className={`h-2 rounded-full ${
-                      (costs?.total_cost || 0) > (user?.cost_limit * 0.9) 
-                        ? 'bg-red-500' 
-                        : (costs?.total_cost || 0) > (user?.cost_limit * 0.7)
-                        ? 'bg-yellow-500'
-                        : 'bg-green-500'
-                    }`}
-                    style={{ 
-                      width: `${Math.min(((costs?.total_cost || 0) / (user?.cost_limit || 100)) * 100, 100)}%` 
-                    }}
-                  ></div>
-                </div>
+            {modelCosts.length === 0 ? (
+              <div className="text-center py-8">
+                <InformationCircleIcon className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+                <p className="text-gray-500">No model cost data available</p>
               </div>
-
+            ) : (
               <div className="space-y-3">
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Remaining Budget</span>
-                  <span className="font-medium text-gray-900">
-                    ${Math.max((user?.cost_limit || 100) - (costs?.total_cost || 0), 0).toFixed(2)}
-                  </span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Estimated Days Remaining</span>
-                  <span className="font-medium text-gray-900">
-                    {Math.floor(Math.max((user?.cost_limit || 100) - (costs?.total_cost || 0), 0) / Math.max((costs?.total_cost || 0.1) / 30, 0.1))} days
-                  </span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Daily Average</span>
-                  <span className="font-medium text-gray-900">
-                    ${((costs?.total_cost || 0) / 30).toFixed(2)}
-                  </span>
-                </div>
-              </div>
-
-              {(costs?.total_cost || 0) > (user?.cost_limit * 0.9) && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-3">
-                  <p className="text-sm text-red-700">
-                    <strong>Critical:</strong> You're approaching your budget limit. 
-                    Consider reducing usage or requesting a budget increase.
+                {modelCosts.slice(0, 5).map((model, index) => {
+                  const maxCost = Math.max(...modelCosts.map(m => m.total_cost));
+                  const percentage = maxCost > 0 ? (model.total_cost / maxCost) * 100 : 0;
+                  
+                  return (
+                    <div key={model.model_id} className="flex items-center">
+                      <div className="w-24 text-sm text-gray-600 truncate">
+                        {model.model_name || `Model ${model.model_id}`}
+                      </div>
+                      <div className="flex-1 mx-3">
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div
+                            className="bg-green-500 h-2 rounded-full"
+                            style={{ width: `${percentage}%` }}
+                          />
+                        </div>
+                      </div>
+                      <div className="w-20 text-sm font-medium text-gray-900 text-right">
+                        {formatCurrency(model.total_cost)}
+                      </div>
+                    </div>
+                  );
+                })}
+                {modelCosts.length > 5 && (
+                  <p className="text-sm text-gray-500 text-center mt-2">
+                    +{modelCosts.length - 5} more models
                   </p>
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            )}
           </div>
+        </div>
+      </div>
+
+      {/* Recent Transactions */}
+      <div className="card">
+        <div className="card-header">
+          <h3 className="text-lg font-medium text-gray-900">Recent Transactions</h3>
+        </div>
+        <div className="card-body">
+          {costData.recent_transactions && costData.recent_transactions.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="min-w-full table">
+                <thead>
+                  <tr className="table-header">
+                    <th className="table-cell text-left">Time</th>
+                    <th className="table-cell text-left">User</th>
+                    <th className="table-cell text-left">Model</th>
+                    <th className="table-cell text-right">Tokens</th>
+                    <th className="table-cell text-right">Cost</th>
+                  </tr>
+                </thead>
+                <tbody className="table-body">
+                  {costData.recent_transactions.slice(0, 10).map((transaction, index) => (
+                    <tr key={index} className="table-row">
+                      <td className="table-cell">
+                        {new Date(transaction.created_at).toLocaleString()}
+                      </td>
+                      <td className="table-cell">
+                        {transaction.username || `User ${transaction.user_id}`}
+                      </td>
+                      <td className="table-cell">
+                        {transaction.model_name || 'Unknown'}
+                      </td>
+                      <td className="table-cell text-right">
+                        {formatTokens(transaction.tokens)}
+                      </td>
+                      <td className="table-cell text-right font-medium">
+                        {formatCurrency(transaction.cost)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="text-center py-8">
+              <InformationCircleIcon className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+              <p className="text-gray-500">No recent transactions</p>
+            </div>
+          )}
         </div>
       </div>
     </div>

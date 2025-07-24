@@ -1,19 +1,29 @@
-// src/components/AdminPanel.js
+// src/components/AdminPanel.js - Updated version
 import React, { useState } from 'react';
 import { Tab } from '@headlessui/react';
 import {
   CogIcon,
   CommandLineIcon,
   ServerIcon,
-  // DatabaseIcon,
   UsersIcon,
   ChartBarIcon,
 } from '@heroicons/react/24/outline';
 import SQLExecutor from './SQLExecutor';
+import DatabaseBrowser from './DatabaseBrowser';
+import UserManagement from './UserManagement';
 
 function classNames(...classes) {
   return classes.filter(Boolean).join(' ');
 }
+
+// Placeholder components for missing features
+const SystemHealth = () => (
+  <div className="text-center py-12">
+    <ChartBarIcon className="mx-auto h-12 w-12 text-gray-400" />
+    <h3 className="mt-2 text-sm font-medium text-gray-900">System Health</h3>
+    <p className="mt-1 text-sm text-gray-500">Performance monitoring coming soon</p>
+  </div>
+);
 
 const AdminPanel = () => {
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -40,6 +50,8 @@ const AdminPanel = () => {
       component: SystemHealth,
     },
   ];
+
+  const ActiveComponent = tabs[selectedIndex].component;
 
   return (
     <div className="p-6">
@@ -70,71 +82,18 @@ const AdminPanel = () => {
                 }
               >
                 <div className="flex items-center justify-center space-x-2">
-                  <tab.icon className="h-5 w-5" />
+                  <tab.icon className="h-4 w-4" />
                   <span>{tab.name}</span>
                 </div>
               </Tab>
             ))}
           </Tab.List>
           <Tab.Panels className="mt-0">
-            {tabs.map((tab, index) => (
-              <Tab.Panel
-                key={index}
-                className="rounded-b-lg bg-white focus:outline-none"
-              >
-                <tab.component />
-              </Tab.Panel>
-            ))}
+            <Tab.Panel className="rounded-b-lg bg-white p-6 focus:outline-none">
+              <ActiveComponent />
+            </Tab.Panel>
           </Tab.Panels>
         </Tab.Group>
-      </div>
-    </div>
-  );
-};
-
-// Database Browser Component
-const DatabaseBrowser = () => {
-  return (
-    <div className="p-6">
-      <div className="text-center py-12">
-        <ServerIcon className="mx-auto h-12 w-12 text-gray-400" />
-        <h3 className="mt-2 text-sm font-medium text-gray-900">Database Browser</h3>
-        <p className="mt-1 text-sm text-gray-500">
-          Browse database tables and view schema information
-        </p>
-        <p className="mt-2 text-xs text-gray-400">Coming in next update</p>
-      </div>
-    </div>
-  );
-};
-
-// User Management Component
-const UserManagement = () => {
-  return (
-    <div className="p-6">
-      <div className="text-center py-12">
-        <UsersIcon className="mx-auto h-12 w-12 text-gray-400" />
-        <h3 className="mt-2 text-sm font-medium text-gray-900">User Management</h3>
-        <p className="mt-1 text-sm text-gray-500">
-          Manage user accounts, roles, and permissions
-        </p>
-        <p className="mt-2 text-xs text-gray-400">Coming in next update</p>
-      </div>
-    </div>
-  );
-};
-
-// System Health Component
-const SystemHealth = () => {
-  return (
-    <div className="p-6">
-      <div className="text-center py-12">
-        <ChartBarIcon className="mx-auto h-12 w-12 text-gray-400" />
-        <h3 className="mt-2 text-sm font-medium text-gray-900">System Health</h3>
-        <p className="mt-1 text-sm text-gray-500">
-          Monitor system performance and health metrics
-        </p>
-        <p className="mt-2 text-xs text-gray-400">Coming in next update</p>
       </div>
     </div>
   );
