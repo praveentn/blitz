@@ -40,11 +40,12 @@ class SQLExecutorService:
             r';\s*UPDATE\s+.*\s+SET\s+',
             r'--\s*$',
             r'/\*.*\*/',
-            r'UNION\s+SELECT',
-            r'OR\s+1\s*=\s*1',
-            r'AND\s+1\s*=\s*1'
+            r'UNION\s+.*SELECT',
+            r'EXEC\s*\(',
+            r'xp_\w+',
+            r'sp_\w+'
         ]
-    
+        
     def _extract_db_path(self, db_url: str) -> str:
         """Extract database file path from URL with Flask instance folder support"""
         if db_url.startswith('sqlite:///'):
@@ -152,6 +153,38 @@ class SQLExecutorService:
         
         return analysis
     
+    def validate_query(self, query: str) -> Tuple[bool, str, str]:
+        """
+        Validate SQL query for security and safety
+        Returns: (is_valid, command_type, error_message)
+        """
+        if not query or not query.strip():
+            return False, "", "Empty query"
+        
+        # Clean the query
+        clean_query = query.strip().upper()
+        
+        # Check for dangerous patterns
+        for pattern in self.injection_patterns:
+            if re.search(pattern, clean_query, re.IGNORECASE):
+                return False, "", f"Potentially dangerous pattern detected: {pattern}"
+        
+        # Determine command type
+        first_word = clean_query.split()[0] if clean_query.split() else ""
+        
+        if first_word in self.read_only_commands:
+            return True, "READ", ""
+        elif first_word in self.write_commands:
+            return True, "WRITE", ""
+        elif first_word in self.ddl_commands:
+            if first_word in self.dangerous_commands:
+                return False, "DANGEROUS", f"Dangerous command: {first_word}"
+            return True, "DDL", ""
+        else:
+            return False, "UNKNOWN", f"Unknown or unsupported command: {first_word}"
+    
+
+
     def execute_query(self, query: str, page: int = 1, per_page: int = 100, 
                     allow_dangerous: bool = False) -> Dict[str, Any]:
         """Execute SQL query with safety checks and pagination"""
@@ -581,3 +614,264 @@ class SQLExecutorService:
                 'success': False,
                 'error': f'Export failed: {str(e)}'
             }
+
+
+    def get_query_history(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Get recent query history (if logging is implemented)"""
+        # This would require a query_history table to be implemented
+        # For now, return empty list
+        return []
+    
+    def save_query_history(self, query: str, success: bool, execution_time: float, 
+                         user_id: int = None) -> None:
+        """Save query to history (if logging is implemented)"""
+        # This would save to a query_history table
+        # Implementation depends on whether you want to add this table
+        pass
+    
+    def get_database_info(self) -> Dict[str, Any]:
+        """Get general database information"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Get database file size
+                db_size = os.path.getsize(self.db_path) if os.path.exists(self.db_path) else 0
+                
+                # Get table count
+                cursor.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
+                table_count = cursor.fetchone()[0]
+                
+                # Get total records across all tables
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                tables = cursor.fetchall()
+                
+                total_records = 0
+                for table in tables:
+                    try:
+                        cursor.execute(f"SELECT COUNT(*) FROM `{table[0]}`")
+                        total_records += cursor.fetchone()[0]
+                    except:
+                        pass
+                
+                # Get SQLite version
+                cursor.execute("SELECT sqlite_version()")
+                sqlite_version = cursor.fetchone()[0]
+                
+                return {
+                    'database_path': self.db_path,
+                    'database_size_bytes': db_size,
+                    'database_size_mb': round(db_size / (1024 * 1024), 2),
+                    'table_count': table_count,
+                    'total_records': total_records,
+                    'sqlite_version': sqlite_version,
+                    'last_modified': datetime.fromtimestamp(os.path.getmtime(self.db_path)).isoformat() if os.path.exists(self.db_path) else None
+                }
+        
+        except Exception as e:
+            raise Exception(f"Failed to get database info: {str(e)}")
+
+
+    def execute_query(self, query: str, params: tuple = None, page: int = 1, 
+                     page_size: int = 50, allow_dangerous: bool = False) -> Dict[str, Any]:
+        """
+        Execute SQL query with pagination and safety checks
+        """
+        start_time = time.time()
+        
+        # Validate query
+        is_valid, command_type, error_msg = self.validate_query(query)
+        if not is_valid:
+            if command_type == "DANGEROUS" and not allow_dangerous:
+                return {
+                    'success': False,
+                    'error': f"Dangerous operation blocked: {error_msg}",
+                    'query_type': command_type,
+                    'execution_time': time.time() - start_time
+                }
+            elif not is_valid:
+                return {
+                    'success': False,
+                    'error': error_msg,
+                    'query_type': command_type,
+                    'execution_time': time.time() - start_time
+                }
+        
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                if command_type == "READ":
+                    # For SELECT queries, add pagination
+                    if query.upper().strip().startswith('SELECT'):
+                        # Count total rows
+                        count_query = f"SELECT COUNT(*) FROM ({query}) AS count_subquery"
+                        cursor.execute(count_query, params or ())
+                        total_rows = cursor.fetchone()[0]
+                        
+                        # Add pagination to original query
+                        offset = (page - 1) * page_size
+                        paginated_query = f"{query} LIMIT {page_size} OFFSET {offset}"
+                        cursor.execute(paginated_query, params or ())
+                    else:
+                        # Non-SELECT read operations (PRAGMA, etc.)
+                        cursor.execute(query, params or ())
+                        total_rows = cursor.rowcount
+                    
+                    # Fetch results
+                    rows = cursor.fetchall()
+                    columns = [description[0] for description in cursor.description] if cursor.description else []
+                    
+                    # Convert rows to dictionaries
+                    data = []
+                    for row in rows:
+                        row_dict = {}
+                        for i, col in enumerate(columns):
+                            row_dict[col] = row[i]
+                        data.append(row_dict)
+                    
+                    return {
+                        'success': True,
+                        'data': data,
+                        'columns': columns,
+                        'total_rows': total_rows if query.upper().strip().startswith('SELECT') else len(data),
+                        'page': page,
+                        'page_size': page_size,
+                        'total_pages': (total_rows + page_size - 1) // page_size if query.upper().strip().startswith('SELECT') else 1,
+                        'query_type': command_type,
+                        'execution_time': round(time.time() - start_time, 3)
+                    }
+                
+                else:
+                    # For write operations
+                    cursor.execute(query, params or ())
+                    conn.commit()
+                    
+                    return {
+                        'success': True,
+                        'message': f"Query executed successfully. Rows affected: {cursor.rowcount}",
+                        'rows_affected': cursor.rowcount,
+                        'query_type': command_type,
+                        'execution_time': round(time.time() - start_time, 3)
+                    }
+        
+        except sqlite3.Error as e:
+            return {
+                'success': False,
+                'error': f"Database error: {str(e)}",
+                'query_type': command_type,
+                'execution_time': round(time.time() - start_time, 3)
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'error': f"Execution error: {str(e)}",
+                'query_type': command_type,
+                'execution_time': round(time.time() - start_time, 3)
+            }
+    
+    def get_tables(self) -> List[Dict[str, Any]]:
+        """Get list of all tables in the database"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT name, type, sql 
+                    FROM sqlite_master 
+                    WHERE type='table' 
+                    ORDER BY name
+                """)
+                
+                tables = []
+                for row in cursor.fetchall():
+                    # Get row count for each table
+                    try:
+                        cursor.execute(f"SELECT COUNT(*) FROM `{row[0]}`")
+                        row_count = cursor.fetchone()[0]
+                    except:
+                        row_count = 0
+                    
+                    tables.append({
+                        'name': row[0],
+                        'type': row[1],
+                        'sql': row[2],
+                        'row_count': row_count
+                    })
+                
+                return tables
+        
+        except Exception as e:
+            raise Exception(f"Failed to get tables: {str(e)}")
+    
+    def get_table_schema(self, table_name: str) -> List[Dict[str, Any]]:
+        """Get schema information for a specific table"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(f"PRAGMA table_info(`{table_name}`)")
+                
+                schema = []
+                for row in cursor.fetchall():
+                    schema.append({
+                        'column_id': row[0],
+                        'name': row[1],
+                        'type': row[2],
+                        'not_null': bool(row[3]),
+                        'default_value': row[4],
+                        'primary_key': bool(row[5])
+                    })
+                
+                return schema
+        
+        except Exception as e:
+            raise Exception(f"Failed to get table schema: {str(e)}")
+    
+    def get_table_data(self, table_name: str, page: int = 1, page_size: int = 50) -> Dict[str, Any]:
+        """Get paginated data from a specific table"""
+        query = f"SELECT * FROM `{table_name}`"
+        return self.execute_query(query, page=page, page_size=page_size)
+    
+    def export_results(self, data: List[Dict], format_type: str = 'csv') -> str:
+        """Export query results to file"""
+        if not data:
+            raise ValueError("No data to export")
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        if format_type.lower() == 'csv':
+            import csv
+            import io
+            
+            output = io.StringIO()
+            if data:
+                writer = csv.DictWriter(output, fieldnames=data[0].keys())
+                writer.writeheader()
+                writer.writerows(data)
+            
+            filename = f"query_results_{timestamp}.csv"
+            filepath = os.path.join('temp', filename)
+            
+            # Ensure temp directory exists
+            os.makedirs('temp', exist_ok=True)
+            
+            with open(filepath, 'w', newline='', encoding='utf-8') as f:
+                f.write(output.getvalue())
+            
+            return filepath
+        
+        elif format_type.lower() == 'json':
+            import json
+            
+            filename = f"query_results_{timestamp}.json"
+            filepath = os.path.join('temp', filename)
+            
+            # Ensure temp directory exists
+            os.makedirs('temp', exist_ok=True)
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, default=str)
+            
+            return filepath
+        
+        else:
+            raise ValueError(f"Unsupported export format: {format_type}")

@@ -36,7 +36,7 @@ const SQLExecutor = () => {
     },
     {
       name: 'Models with costs',
-      query: 'SELECT m.name, m.provider, m.cost_per_1k_tokens, COUNT(e.id) as executions FROM models m LEFT JOIN executions e ON m.id = e.model_id GROUP BY m.id ORDER BY executions DESC;'
+      query: 'SELECT m.name, m.provider, m.cost_per_token, COUNT(e.id) as executions FROM models m LEFT JOIN executions e ON m.id = e.model_id GROUP BY m.id ORDER BY executions DESC;'
     },
     {
       name: 'Cost summary by user',
@@ -55,33 +55,59 @@ const SQLExecutor = () => {
 
   const loadTables = async () => {
     try {
-      const response = await apiService.admin.getTables();
-      setTables(response.data || []);
+      const response = await apiService.get('/admin/tables');
+      // Ensure tables is always an array
+      const tablesData = response?.data || [];
+      setTables(Array.isArray(tablesData) ? tablesData : []);
     } catch (error) {
       console.error('Error loading tables:', error);
+      // Set to empty array on error to prevent map errors
+      setTables([]);
     }
   };
 
   const loadTableSchema = async (tableName) => {
     try {
-      const response = await apiService.admin.getTableSchema(tableName);
-      setTableSchema(response.data);
+      setLoading(true);
+      const response = await apiService.get(`/admin/table/${tableName}/schema`);
+      setTableSchema(response?.data || []);
     } catch (error) {
       handleApiError(error);
-      setTableSchema(null);
+      setTableSchema([]);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const loadQueryHistory = () => {
-    const history = JSON.parse(localStorage.getItem('sqlQueryHistory') || '[]');
-    setQueryHistory(history.slice(0, 10)); // Keep last 10 queries
+  const loadQueryHistory = async () => {
+    try {
+      // This would load from a query history endpoint if implemented
+      // For now, we'll use localStorage
+      const history = localStorage.getItem('sqlQueryHistory');
+      if (history) {
+        setQueryHistory(JSON.parse(history));
+      }
+    } catch (error) {
+      console.error('Error loading query history:', error);
+      setQueryHistory([]);
+    }
   };
 
-  const saveToHistory = (queryText) => {
-    const history = JSON.parse(localStorage.getItem('sqlQueryHistory') || '[]');
-    const newHistory = [queryText, ...history.filter(q => q !== queryText)].slice(0, 10);
-    localStorage.setItem('sqlQueryHistory', JSON.stringify(newHistory));
-    setQueryHistory(newHistory);
+  const saveToHistory = (query, success) => {
+    try {
+      const historyItem = {
+        id: Date.now(),
+        query: query,
+        timestamp: new Date().toISOString(),
+        success: success
+      };
+      
+      const newHistory = [historyItem, ...queryHistory.slice(0, 19)]; // Keep last 20
+      setQueryHistory(newHistory);
+      localStorage.setItem('sqlQueryHistory', JSON.stringify(newHistory));
+    } catch (error) {
+      console.error('Error saving to history:', error);
+    }
   };
 
   const executeQuery = async () => {
@@ -90,151 +116,136 @@ const SQLExecutor = () => {
       return;
     }
 
-    setLoading(true);
     try {
-      const response = await apiService.admin.executeSQL(query, currentPage, pageSize);
+      setLoading(true);
+      setResults(null);
       
-      if (response.data) {
-        setResults(response.data);
-        saveToHistory(query.trim());
-        handleApiSuccess(`Query executed successfully! ${response.data.rows?.length || 0} rows returned.`);
+      const response = await apiService.post('/admin/sql', {
+        query: query.trim(),
+        page: currentPage,
+        page_size: pageSize
+      });
+
+      setResults(response);
+      saveToHistory(query, response.success);
+      
+      if (response.success) {
+        handleApiSuccess('Query executed successfully');
       } else {
-        setResults(null);
-        handleApiError({ message: 'No data returned from query' });
+        handleApiError({ message: response.error || 'Query execution failed' });
       }
     } catch (error) {
       handleApiError(error);
-      setResults(null);
+      saveToHistory(query, false);
     } finally {
       setLoading(false);
     }
   };
 
-  const handlePageChange = (newPage) => {
-    setCurrentPage(newPage);
-    if (query.trim()) {
-      executeQuery();
-    }
-  };
-
-  const exportResults = (format) => {
-    if (!results?.rows?.length) {
-      handleApiError({ message: 'No data to export' });
+  const exportResults = async (format) => {
+    if (!results?.data) {
+      handleApiError({ message: 'No results to export' });
       return;
     }
 
-    let content = '';
-    let filename = '';
-    let mimeType = '';
+    try {
+      setLoading(true);
+      const response = await apiService.post('/admin/sql/export', {
+        query: query,
+        format: format
+      });
 
-    if (format === 'csv') {
-      const headers = results.columns.join(',');
-      const rows = results.rows.map(row => 
-        results.columns.map(col => {
-          const value = row[col];
-          return typeof value === 'string' && value.includes(',') ? `"${value}"` : value;
-        }).join(',')
-      );
-      content = [headers, ...rows].join('\n');
-      filename = 'query_results.csv';
-      mimeType = 'text/csv';
-    } else if (format === 'json') {
-      content = JSON.stringify(results.rows, null, 2);
-      filename = 'query_results.json';
-      mimeType = 'application/json';
+      if (response.success && response.download_url) {
+        // Trigger download
+        const link = document.createElement('a');
+        link.href = response.download_url;
+        link.download = response.filename || `results.${format}`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+        handleApiSuccess(`Results exported as ${format.toUpperCase()}`);
+      } else {
+        handleApiError({ message: 'Export failed' });
+      }
+    } catch (error) {
+      handleApiError(error);
+    } finally {
+      setLoading(false);
     }
-
-    const blob = new Blob([content], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    
-    handleApiSuccess(`Results exported as ${format.toUpperCase()}`);
   };
 
-  const isDangerousQuery = (queryText) => {
-    const dangerous = ['DELETE', 'DROP', 'TRUNCATE', 'ALTER', 'UPDATE'];
-    return dangerous.some(keyword => 
-      queryText.toUpperCase().includes(keyword)
-    );
+  const handleTableSelect = async (tableName) => {
+    setSelectedTable(tableName);
+    if (tableName) {
+      await loadTableSchema(tableName);
+      setQuery(`SELECT * FROM ${tableName} LIMIT 100;`);
+    }
+  };
+
+  const handleSampleQuery = (sampleQuery) => {
+    setQuery(sampleQuery);
+    setSelectedSample(sampleQuery);
   };
 
   const renderResults = () => {
+    if (loading) {
+      return (
+        <div className="card">
+          <div className="flex items-center justify-center p-8">
+            <LoadingSpinner />
+            <span className="ml-2">Executing query...</span>
+          </div>
+        </div>
+      );
+    }
+
     if (!results) return null;
 
-    if (results.error) {
+    if (!results.success) {
       return (
-        <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
-          <div className="flex">
-            <ExclamationTriangleIcon className="h-5 w-5 text-red-400" />
-            <div className="ml-3">
-              <h3 className="text-sm font-medium text-red-800">Query Error</h3>
-              <div className="mt-2 text-sm text-red-700">
-                <pre className="whitespace-pre-wrap">{results.error}</pre>
-              </div>
+        <div className="card">
+          <div className="flex items-center p-4 text-red-600 bg-red-50 rounded-lg">
+            <ExclamationTriangleIcon className="h-5 w-5 mr-2" />
+            <div>
+              <strong>Query Error:</strong> {results.error}
             </div>
           </div>
         </div>
       );
     }
 
-    if (!results.rows || results.rows.length === 0) {
+    if (results.query_type === 'READ' && results.data) {
       return (
-        <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-          <div className="flex">
-            <InformationCircleIcon className="h-5 w-5 text-yellow-400" />
-            <div className="ml-3">
-              <h3 className="text-sm font-medium text-yellow-800">No Results</h3>
-              <p className="mt-1 text-sm text-yellow-700">
-                Query executed successfully but returned no rows.
-              </p>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    return (
-      <div className="mt-4">
-        {/* Results Header */}
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center">
-            <h3 className="text-lg font-medium text-gray-900">Query Results</h3>
-            <span className="ml-3 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-              {results.total_rows || results.rows.length} rows
-            </span>
-            {results.execution_time && (
-              <span className="ml-2 text-sm text-gray-500">
-                Executed in {results.execution_time}ms
+        <div className="card">
+          <div className="flex items-center justify-between p-4 border-b">
+            <div className="flex items-center">
+              <InformationCircleIcon className="h-5 w-5 text-green-500 mr-2" />
+              <span className="text-sm text-gray-600">
+                {results.total_rows} rows found • Execution time: {results.execution_time}s
               </span>
-            )}
+            </div>
+            <div className="flex space-x-2">
+              <button
+                onClick={() => exportResults('csv')}
+                className="btn-secondary"
+                disabled={loading}
+              >
+                <DocumentArrowDownIcon className="h-4 w-4 mr-1" />
+                CSV
+              </button>
+              <button
+                onClick={() => exportResults('json')}
+                className="btn-secondary"
+                disabled={loading}
+              >
+                <DocumentArrowDownIcon className="h-4 w-4 mr-1" />
+                JSON
+              </button>
+            </div>
           </div>
-          
-          <div className="flex space-x-2">
-            <button
-              onClick={() => exportResults('csv')}
-              className="btn-secondary text-sm"
-            >
-              <DocumentArrowDownIcon className="h-4 w-4 mr-1" />
-              CSV
-            </button>
-            <button
-              onClick={() => exportResults('json')}
-              className="btn-secondary text-sm"
-            >
-              <DocumentArrowDownIcon className="h-4 w-4 mr-1" />
-              JSON
-            </button>
-          </div>
-        </div>
 
-        {/* Results Table */}
-        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+          {/* Results Table */}
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
@@ -242,7 +253,7 @@ const SQLExecutor = () => {
                   {results.columns?.map((column, index) => (
                     <th
                       key={index}
-                      className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
                     >
                       {column}
                     </th>
@@ -250,18 +261,15 @@ const SQLExecutor = () => {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {results.rows.map((row, rowIndex) => (
+                {results.data.map((row, rowIndex) => (
                   <tr key={rowIndex} className="hover:bg-gray-50">
                     {results.columns?.map((column, colIndex) => (
                       <td
                         key={colIndex}
-                        className="px-4 py-3 text-sm text-gray-900 font-mono max-w-xs truncate"
-                        title={String(row[column])}
+                        className="px-6 py-4 whitespace-nowrap text-sm text-gray-900"
                       >
-                        {row[column] === null ? (
+                        {row[column] !== null ? String(row[column]) : (
                           <span className="text-gray-400 italic">NULL</span>
-                        ) : (
-                          String(row[column])
                         )}
                       </td>
                     ))}
@@ -270,226 +278,232 @@ const SQLExecutor = () => {
               </tbody>
             </table>
           </div>
-        </div>
 
-        {/* Pagination */}
-        {results.total_rows > pageSize && (
-          <div className="flex items-center justify-between mt-4">
-            <div className="flex items-center">
-              <span className="text-sm text-gray-700">
-                Showing {Math.min((currentPage - 1) * pageSize + 1, results.total_rows)} to{' '}
-                {Math.min(currentPage * pageSize, results.total_rows)} of {results.total_rows} results
-              </span>
-            </div>
-            
-            <div className="flex items-center space-x-2">
-              <button
-                onClick={() => handlePageChange(currentPage - 1)}
-                disabled={currentPage === 1}
-                className="btn-secondary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <ChevronLeftIcon className="h-4 w-4" />
-                Previous
-              </button>
-              
-              <span className="text-sm text-gray-700">
-                Page {currentPage} of {Math.ceil(results.total_rows / pageSize)}
-              </span>
-              
-              <button
-                onClick={() => handlePageChange(currentPage + 1)}
-                disabled={currentPage >= Math.ceil(results.total_rows / pageSize)}
-                className="btn-secondary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Next
-                <ChevronRightIcon className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  return (
-    <div className="space-y-6">
-      {/* Query Input Section */}
-      <div className="bg-white p-6 rounded-lg shadow">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-medium text-gray-900">SQL Query Executor</h2>
-          <div className="flex items-center space-x-2">
-            <select
-              value={pageSize}
-              onChange={(e) => setPageSize(Number(e.target.value))}
-              className="form-select text-sm"
-            >
-              <option value={25}>25 rows</option>
-              <option value={50}>50 rows</option>
-              <option value={100}>100 rows</option>
-              <option value={200}>200 rows</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-4">
-          {/* Sample Queries */}
-          <div className="lg:col-span-1">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Sample Queries
-            </label>
-            <select
-              value={selectedSample}
-              onChange={(e) => {
-                setSelectedSample(e.target.value);
-                if (e.target.value) {
-                  setQuery(e.target.value);
-                }
-              }}
-              className="form-select text-sm w-full"
-            >
-              <option value="">Select sample query...</option>
-              {sampleQueries.map((sample, index) => (
-                <option key={index} value={sample.query}>
-                  {sample.name}
-                </option>
-              ))}
-            </select>
-
-            {/* Query History */}
-            {queryHistory.length > 0 && (
-              <div className="mt-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Recent Queries
-                </label>
-                <div className="space-y-1 max-h-32 overflow-y-auto">
-                  {queryHistory.map((historyQuery, index) => (
-                    <button
-                      key={index}
-                      onClick={() => setQuery(historyQuery)}
-                      className="block w-full text-left text-xs text-gray-600 hover:text-blue-600 truncate"
-                      title={historyQuery}
-                    >
-                      {historyQuery.substring(0, 40)}...
-                    </button>
-                  ))}
-                </div>
+          {/* Pagination */}
+          {results.total_pages > 1 && (
+            <div className="flex items-center justify-between p-4 border-t">
+              <div className="text-sm text-gray-600">
+                Page {results.page} of {results.total_pages} 
+                ({results.total_rows} total rows)
               </div>
-            )}
-          </div>
-
-          {/* Main Query Area */}
-          <div className="lg:col-span-3">
-            <div className="flex items-center justify-between mb-2">
-              <label className="block text-sm font-medium text-gray-700">
-                SQL Query
-              </label>
-              {isDangerousQuery(query) && (
-                <div className="flex items-center text-red-600">
-                  <ExclamationTriangleIcon className="h-4 w-4 mr-1" />
-                  <span className="text-xs">Dangerous operation detected</span>
-                </div>
-              )}
-            </div>
-            
-            <textarea
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Enter your SQL query here..."
-              className="form-textarea w-full h-32 font-mono text-sm"
-              onKeyDown={(e) => {
-                if (e.ctrlKey && e.key === 'Enter') {
-                  executeQuery();
-                }
-              }}
-            />
-            
-            <div className="flex items-center justify-between mt-2">
-              <span className="text-xs text-gray-500">
-                Press Ctrl+Enter to execute
-              </span>
-              <button
-                onClick={executeQuery}
-                disabled={loading || !query.trim()}
-                className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {loading ? (
-                  <LoadingSpinner size="sm" />
-                ) : (
-                  <PlayIcon className="h-4 w-4 mr-2" />
-                )}
-                Execute Query
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Database Browser */}
-      <div className="bg-white p-6 rounded-lg shadow">
-        <h3 className="text-lg font-medium text-gray-900 mb-4">Database Browser</h3>
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Tables
-            </label>
-            <select
-              value={selectedTable}
-              onChange={(e) => {
-                setSelectedTable(e.target.value);
-                if (e.target.value) {
-                  loadTableSchema(e.target.value);
-                }
-              }}
-              className="form-select w-full"
-            >
-              <option value="">Select a table...</option>
-              {tables.map((table, index) => (
-                <option key={index} value={table}>
-                  {table}
-                </option>
-              ))}
-            </select>
-            
-            {selectedTable && (
-              <button
-                onClick={() => setQuery(`SELECT * FROM ${selectedTable} LIMIT 100;`)}
-                className="mt-2 btn-secondary text-sm w-full"
-              >
-                <EyeIcon className="h-4 w-4 mr-2" />
-                Browse Table Data
-              </button>
-            )}
-          </div>
-          
-          {tableSchema && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Schema for {selectedTable}
-              </label>
-              <div className="border border-gray-200 rounded-lg p-3 max-h-48 overflow-y-auto">
-                <table className="min-w-full text-sm">
-                  <thead>
-                    <tr>
-                      <th className="text-left font-medium text-gray-700 pb-2">Column</th>
-                      <th className="text-left font-medium text-gray-700 pb-2">Type</th>
-                      <th className="text-left font-medium text-gray-700 pb-2">Null</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tableSchema.map((column, index) => (
-                      <tr key={index} className="border-t border-gray-100">
-                        <td className="py-1 font-mono text-gray-900">{column.name}</td>
-                        <td className="py-1 text-gray-600">{column.type}</td>
-                        <td className="py-1 text-gray-600">{column.notnull ? 'No' : 'Yes'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="flex space-x-2">
+                <button
+                  onClick={() => {
+                    setCurrentPage(results.page - 1);
+                    executeQuery();
+                  }}
+                  disabled={results.page <= 1}
+                  className="btn-secondary"
+                >
+                  <ChevronLeftIcon className="h-4 w-4" />
+                  Previous
+                </button>
+                <button
+                  onClick={() => {
+                    setCurrentPage(results.page + 1);
+                    executeQuery();
+                  }}
+                  disabled={results.page >= results.total_pages}
+                  className="btn-secondary"
+                >
+                  Next
+                  <ChevronRightIcon className="h-4 w-4 ml-1" />
+                </button>
               </div>
             </div>
           )}
         </div>
+      );
+    } else {
+      // Non-SELECT queries (INSERT, UPDATE, DELETE, etc.)
+      return (
+        <div className="card">
+          <div className="flex items-center p-4 text-green-600 bg-green-50 rounded-lg">
+            <InformationCircleIcon className="h-5 w-5 mr-2" />
+            <div>
+              <strong>Success:</strong> {results.message} • 
+              Execution time: {results.execution_time}s
+            </div>
+          </div>
+        </div>
+      );
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-semibold text-gray-900">SQL Executor</h2>
+          <p className="text-gray-600">Execute SQL queries with pagination and export capabilities</p>
+        </div>
+      </div>
+
+      {/* Query Input */}
+      <div className="card">
+        <div className="p-4 border-b">
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            SQL Query
+          </label>
+          <textarea
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Enter your SQL query here..."
+            className="w-full h-32 p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            style={{ fontFamily: 'monospace' }}
+          />
+        </div>
+
+        <div className="flex items-center justify-between p-4">
+          <div className="flex items-center space-x-4">
+            <button
+              onClick={executeQuery}
+              disabled={loading || !query.trim()}
+              className="btn-primary"
+            >
+              <PlayIcon className="h-4 w-4 mr-2" />
+              Execute Query
+            </button>
+            
+            <div className="flex items-center space-x-2">
+              <label className="text-sm text-gray-600">Page Size:</label>
+              <select
+                value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value))}
+                className="border border-gray-300 rounded px-2 py-1 text-sm"
+              >
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
+          </div>
+          
+          <div className="text-xs text-gray-500">
+            Use Ctrl+Enter to execute query
+          </div>
+        </div>
+      </div>
+
+      {/* Sidebar */}
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+        {/* Sample Queries */}
+        <div className="card">
+          <h3 className="text-lg font-medium text-gray-900 p-4 border-b">Sample Queries</h3>
+          <div className="p-4 space-y-2">
+            {sampleQueries.map((sample, index) => (
+              <button
+                key={index}
+                onClick={() => handleSampleQuery(sample.query)}
+                className="w-full text-left p-2 text-sm hover:bg-gray-50 rounded border"
+              >
+                {sample.name}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Database Tables */}
+        <div className="card">
+          <h3 className="text-lg font-medium text-gray-900 p-4 border-b flex items-center">
+            <TableCellsIcon className="h-5 w-5 mr-2" />
+            Database Tables
+          </h3>
+          <div className="p-4 space-y-2 max-h-64 overflow-y-auto">
+            {Array.isArray(tables) && tables.length > 0 ? (
+              tables.map((table, index) => (
+                <button
+                  key={index}
+                  onClick={() => handleTableSelect(table.name)}
+                  className={`w-full text-left p-2 text-sm hover:bg-gray-50 rounded border ${
+                    selectedTable === table.name ? 'bg-blue-50 border-blue-200' : ''
+                  }`}
+                >
+                  <div className="font-medium">{table.name}</div>
+                  <div className="text-xs text-gray-500">
+                    {table.row_count} rows
+                  </div>
+                </button>
+              ))
+            ) : (
+              <div className="text-sm text-gray-500 text-center py-4">
+                No tables found
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Query History */}
+        <div className="card">
+          <h3 className="text-lg font-medium text-gray-900 p-4 border-b">Query History</h3>
+          <div className="p-4 space-y-2 max-h-64 overflow-y-auto">
+            {queryHistory.length > 0 ? (
+              queryHistory.map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => setQuery(item.query)}
+                  className="w-full text-left p-2 text-sm hover:bg-gray-50 rounded border"
+                >
+                  <div className="truncate font-medium">
+                    {item.query.substring(0, 50)}...
+                  </div>
+                  <div className="text-xs text-gray-500 flex justify-between">
+                    <span>{new Date(item.timestamp).toLocaleString()}</span>
+                    <span className={item.success ? 'text-green-500' : 'text-red-500'}>
+                      {item.success ? '✓' : '✗'}
+                    </span>
+                  </div>
+                </button>
+              ))
+            ) : (
+              <div className="text-sm text-gray-500 text-center py-4">
+                No query history
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Table Schema */}
+        {selectedTable && (
+          <div className="card">
+            <h3 className="text-lg font-medium text-gray-900 p-4 border-b flex items-center">
+              <EyeIcon className="h-5 w-5 mr-2" />
+              {selectedTable} Schema
+            </h3>
+            <div className="p-4">
+              {tableSchema && Array.isArray(tableSchema) ? (
+                <div className="space-y-2">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="text-left py-1">Column</th>
+                        <th className="text-left py-1">Type</th>
+                        <th className="text-left py-1">Null</th>
+                        <th className="text-left py-1">Key</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tableSchema.map((column, index) => (
+                        <tr key={index} className="border-b">
+                          <td className="py-1 font-medium">{column.name}</td>
+                          <td className="py-1 text-gray-600">{column.type}</td>
+                          <td className="py-1 text-gray-600">{column.not_null ? 'No' : 'Yes'}</td>
+                          <td className="py-1 text-gray-600">{column.primary_key ? 'PK' : ''}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="text-sm text-gray-500">
+                  {loading ? 'Loading schema...' : 'No schema available'}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Results Section */}

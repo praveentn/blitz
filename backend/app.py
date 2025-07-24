@@ -30,7 +30,15 @@ def create_app():
     # Initialize extensions
     init_app_config(app)
     db.init_app(app)
-    CORS(app, origins=app.config['CORS_ORIGINS'])
+    # CORS(app, origins=app.config['CORS_ORIGINS'])
+    # Configure CORS properly
+    from flask_cors import CORS
+    
+    CORS(app, 
+         origins=['http://localhost:3000'],
+         methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+         allow_headers=['Content-Type', 'Authorization'],
+         supports_credentials=True)    
     
     jwt = JWTManager(app)
 
@@ -62,7 +70,17 @@ def create_app():
     def before_request():
         g.start_time = time.time()
         g.request_id = str(uuid.uuid4())
-    
+
+    @app.before_request
+    def handle_options():
+        if request.method == 'OPTIONS':
+            response = jsonify({})
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+            response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+            return response
+
+
     @app.after_request
     def after_request(response):
         if hasattr(g, 'start_time'):
@@ -1057,8 +1075,483 @@ def register_routes(app):
         except Exception as e:
             app.logger.error(f"Get user costs error: {e}")
             return jsonify({'error': 'Failed to fetch user costs'}), 500
-    
+
+    # Model management - PUT/DELETE routes
+    # Model UPDATE route (ADD THIS)
+    @app.route('/api/models/<int:model_id>', methods=['PUT', 'OPTIONS'])
+    @jwt_required()
+    def update_model(model_id):
+        if request.method == 'OPTIONS':
+            return '', 200
+            
+        try:
+            model = Model.query.get(model_id)
+            if not model:
+                return jsonify({'error': 'Model not found'}), 404
+            
+            data = request.get_json()
+            if not data:
+                return jsonify({'error': 'No data provided'}), 400
+            
+            # Update fields
+            if 'name' in data:
+                model.name = data['name']
+            if 'provider' in data:
+                model.provider = data['provider']
+            if 'model_name' in data:
+                model.model_name = data['model_name']
+            if 'endpoint' in data:
+                model.endpoint = data['endpoint']
+            if 'api_key' in data:
+                model.api_key = data['api_key']
+            if 'parameters' in data:
+                model.parameters = data['parameters']
+            if 'cost_per_token' in data:
+                model.cost_per_token = round(float(data['cost_per_token']), 5)
+            
+            model.updated_at = datetime.utcnow()
+            db.session.commit()
+            
+            return jsonify({'message': 'Model updated successfully'})
+            
+        except Exception as e:
+            app.logger.error(f"Update model error: {e}")
+            db.session.rollback()
+            return jsonify({'error': 'Failed to update model'}), 500
+
+    # Model DELETE route (ADD THIS)
+    @app.route('/api/models/<int:model_id>', methods=['DELETE'])
+    @jwt_required()
+    def delete_model(model_id):
+        try:
+            model = Model.query.get(model_id)
+            if not model:
+                return jsonify({'error': 'Model not found'}), 404
+            
+            # Soft delete by setting is_active to False
+            model.is_active = False
+            model.updated_at = datetime.utcnow()
+            db.session.commit()
+            
+            return jsonify({'message': 'Model deleted successfully'})
+            
+        except Exception as e:
+            app.logger.error(f"Delete model error: {e}")
+            db.session.rollback()
+            return jsonify({'error': 'Failed to delete model'}), 500
+
+    # Prompt UPDATE route (ADD THIS)
+    @app.route('/api/prompts/<int:prompt_id>', methods=['PUT', 'OPTIONS'])
+    @jwt_required()
+    def update_prompt(prompt_id):
+        if request.method == 'OPTIONS':
+            return '', 200
+            
+        try:
+            prompt = Prompt.query.get(prompt_id)
+            if not prompt:
+                return jsonify({'error': 'Prompt not found'}), 404
+            
+            data = request.get_json()
+            if not data:
+                return jsonify({'error': 'No data provided'}), 400
+            
+            # Update fields
+            if 'name' in data:
+                prompt.name = data['name']
+            if 'description' in data:
+                prompt.description = data['description']
+            if 'template' in data:
+                prompt.template = data['template']
+            if 'input_schema' in data:
+                prompt.input_schema = data['input_schema']
+            if 'output_schema' in data:
+                prompt.output_schema = data['output_schema']
+            
+            prompt.updated_at = datetime.utcnow()
+            db.session.commit()
+            
+            return jsonify({'message': 'Prompt updated successfully'})
+            
+        except Exception as e:
+            app.logger.error(f"Update prompt error: {e}")
+            db.session.rollback()
+            return jsonify({'error': 'Failed to update prompt'}), 500
+
+    # Prompt DELETE route (ADD THIS)
+    @app.route('/api/prompts/<int:prompt_id>', methods=['DELETE'])
+    @jwt_required()
+    def delete_prompt(prompt_id):
+        try:
+            prompt = Prompt.query.get(prompt_id)
+            if not prompt:
+                return jsonify({'error': 'Prompt not found'}), 404
+            
+            # Soft delete
+            prompt.is_active = False
+            prompt.updated_at = datetime.utcnow()
+            db.session.commit()
+            
+            return jsonify({'message': 'Prompt deleted successfully'})
+            
+        except Exception as e:
+            app.logger.error(f"Delete prompt error: {e}")
+            db.session.rollback()
+            return jsonify({'error': 'Failed to delete prompt'}), 500
+
+    # Tool CREATE route (ADD THIS - currently missing)
+    @app.route('/api/tools', methods=['POST'])
+    @jwt_required()
+    @admin_required  # Only admins can create tools
+    def create_tool():
+        try:
+            user_id = int(get_jwt_identity())
+            data = request.get_json()
+            
+            required_fields = ['name', 'description', 'tool_type']
+            if not data or not all(field in data for field in required_fields):
+                return jsonify({'error': 'Name, description, and tool_type required'}), 400
+            
+            tool = Tool(
+                name=data['name'],
+                description=data['description'],
+                tool_type=data['tool_type'],
+                implementation=data.get('implementation', ''),
+                parameters_schema=data.get('parameters_schema', {}),
+                output_schema=data.get('output_schema', {}),
+                is_active=True,
+                created_by=user_id
+            )
+            
+            db.session.add(tool)
+            db.session.commit()
+            
+            return jsonify({
+                'id': tool.id,
+                'message': 'Tool created successfully'
+            }), 201
+            
+        except Exception as e:
+            app.logger.error(f"Create tool error: {e}")
+            db.session.rollback()
+            return jsonify({'error': 'Failed to create tool'}), 500
+
+    # Tool UPDATE route (ADD THIS)
+    @app.route('/api/tools/<int:tool_id>', methods=['PUT', 'OPTIONS'])
+    @jwt_required()
+    @admin_required
+    def update_tool(tool_id):
+        if request.method == 'OPTIONS':
+            return '', 200
+            
+        try:
+            tool = Tool.query.get(tool_id)
+            if not tool:
+                return jsonify({'error': 'Tool not found'}), 404
+            
+            data = request.get_json()
+            if not data:
+                return jsonify({'error': 'No data provided'}), 400
+            
+            # Update fields
+            if 'name' in data:
+                tool.name = data['name']
+            if 'description' in data:
+                tool.description = data['description']
+            if 'tool_type' in data:
+                tool.tool_type = data['tool_type']
+            if 'implementation' in data:
+                tool.implementation = data['implementation']
+            if 'parameters_schema' in data:
+                tool.parameters_schema = data['parameters_schema']
+            if 'output_schema' in data:
+                tool.output_schema = data['output_schema']
+            
+            tool.updated_at = datetime.utcnow()
+            db.session.commit()
+            
+            return jsonify({'message': 'Tool updated successfully'})
+            
+        except Exception as e:
+            app.logger.error(f"Update tool error: {e}")
+            db.session.rollback()
+            return jsonify({'error': 'Failed to update tool'}), 500
+
+    # Tool DELETE route (ADD THIS)
+    @app.route('/api/tools/<int:tool_id>', methods=['DELETE'])
+    @jwt_required()
+    @admin_required
+    def delete_tool(tool_id):
+        try:
+            tool = Tool.query.get(tool_id)
+            if not tool:
+                return jsonify({'error': 'Tool not found'}), 404
+            
+            # Soft delete
+            tool.is_active = False
+            tool.updated_at = datetime.utcnow()
+            db.session.commit()
+            
+            return jsonify({'message': 'Tool deleted successfully'})
+            
+        except Exception as e:
+            app.logger.error(f"Delete tool error: {e}")
+            db.session.rollback()
+            return jsonify({'error': 'Failed to delete tool'}), 500
+
+    # Agent UPDATE route (ADD THIS)
+    @app.route('/api/agents/<int:agent_id>', methods=['PUT', 'OPTIONS'])
+    @jwt_required()
+    def update_agent(agent_id):
+        if request.method == 'OPTIONS':
+            return '', 200
+            
+        try:
+            agent = Agent.query.get(agent_id)
+            if not agent:
+                return jsonify({'error': 'Agent not found'}), 404
+            
+            data = request.get_json()
+            if not data:
+                return jsonify({'error': 'No data provided'}), 400
+            
+            # Update fields
+            if 'name' in data:
+                agent.name = data['name']
+            if 'description' in data:
+                agent.description = data['description']
+            if 'model_id' in data:
+                agent.model_id = data['model_id']
+            if 'prompt_id' in data:
+                agent.prompt_id = data['prompt_id']
+            if 'parameters' in data:
+                agent.parameters = data['parameters']
+            if 'memory_config' in data:
+                agent.memory_config = data['memory_config']
+            
+            # Update tools if specified
+            if 'tool_ids' in data:
+                tools = Tool.query.filter(Tool.id.in_(data['tool_ids'])).all()
+                agent.tools = tools
+            
+            agent.updated_at = datetime.utcnow()
+            db.session.commit()
+            
+            return jsonify({'message': 'Agent updated successfully'})
+            
+        except Exception as e:
+            app.logger.error(f"Update agent error: {e}")
+            db.session.rollback()
+            return jsonify({'error': 'Failed to update agent'}), 500
+
+    # Agent DELETE route (ADD THIS)
+    @app.route('/api/agents/<int:agent_id>', methods=['DELETE'])
+    @jwt_required()
+    def delete_agent(agent_id):
+        try:
+            agent = Agent.query.get(agent_id)
+            if not agent:
+                return jsonify({'error': 'Agent not found'}), 404
+            
+            # Soft delete
+            agent.is_active = False
+            agent.updated_at = datetime.utcnow()
+            db.session.commit()
+            
+            return jsonify({'message': 'Agent deleted successfully'})
+            
+        except Exception as e:
+            app.logger.error(f"Delete agent error: {e}")
+            db.session.rollback()
+            return jsonify({'error': 'Failed to delete agent'}), 500
+
+    # Workflow UPDATE route (ADD THIS)
+    @app.route('/api/workflows/<int:workflow_id>', methods=['PUT', 'OPTIONS'])
+    @jwt_required()
+    def update_workflow(workflow_id):
+        if request.method == 'OPTIONS':
+            return '', 200
+            
+        try:
+            workflow = Workflow.query.get(workflow_id)
+            if not workflow:
+                return jsonify({'error': 'Workflow not found'}), 404
+            
+            data = request.get_json()
+            if not data:
+                return jsonify({'error': 'No data provided'}), 400
+            
+            # Update fields
+            if 'name' in data:
+                workflow.name = data['name']
+            if 'description' in data:
+                workflow.description = data['description']
+            if 'definition' in data:
+                workflow.definition = data['definition']
+            
+            workflow.updated_at = datetime.utcnow()
+            db.session.commit()
+            
+            return jsonify({'message': 'Workflow updated successfully'})
+            
+        except Exception as e:
+            app.logger.error(f"Update workflow error: {e}")
+            db.session.rollback()
+            return jsonify({'error': 'Failed to update workflow'}), 500
+
+    # Workflow DELETE route (ADD THIS)
+    @app.route('/api/workflows/<int:workflow_id>', methods=['DELETE'])
+    @jwt_required()
+    def delete_workflow(workflow_id):
+        try:
+            workflow = Workflow.query.get(workflow_id)
+            if not workflow:
+                return jsonify({'error': 'Workflow not found'}), 404
+            
+            # Soft delete
+            workflow.is_active = False
+            workflow.updated_at = datetime.utcnow()
+            db.session.commit()
+            
+            return jsonify({'message': 'Workflow deleted successfully'})
+            
+        except Exception as e:
+            app.logger.error(f"Delete workflow error: {e}")
+            db.session.rollback()
+            return jsonify({'error': 'Failed to delete workflow'}), 500
+
+
+    # Cost tracking routes (ADD THESE)
+    @app.route('/api/costs', methods=['GET'])
+    @jwt_required()
+    def get_costs():
+        try:
+            user_id = int(get_jwt_identity())
+            timeframe = request.args.get('timeframe', '7d')
+            model_filter = request.args.get('model', 'all')
+            
+            # Calculate date range
+            if timeframe == '1d':
+                since_date = datetime.utcnow() - timedelta(days=1)
+            elif timeframe == '30d':
+                since_date = datetime.utcnow() - timedelta(days=30)
+            else:  # 7d default
+                since_date = datetime.utcnow() - timedelta(days=7)
+            
+            # Get user costs (admins see all, users see their own)
+            user = User.query.get(user_id)
+            if user.role == 'admin':
+                costs_query = Cost.query.filter(Cost.created_at >= since_date)
+            else:
+                costs_query = Cost.query.filter(
+                    Cost.user_id == user_id,
+                    Cost.created_at >= since_date
+                )
+            
+            # Apply model filter if specified
+            if model_filter != 'all':
+                costs_query = costs_query.join(Execution).filter(
+                    Execution.model_id == int(model_filter)
+                )
+            
+            costs = costs_query.all()
+            
+            # Calculate aggregations
+            total_cost = sum(cost.amount for cost in costs)
+            
+            # Daily breakdown
+            daily_costs = {}
+            for cost in costs:
+                date_key = cost.created_at.strftime('%Y-%m-%d')
+                if date_key not in daily_costs:
+                    daily_costs[date_key] = 0.0
+                daily_costs[date_key] = round(daily_costs[date_key] + cost.amount, 3)
+            
+            # Model breakdown
+            model_costs = {}
+            for cost in costs:
+                execution = Execution.query.get(cost.execution_id)
+                if execution and execution.model_id:
+                    model = Model.query.get(execution.model_id)
+                    model_name = model.name if model else 'Unknown'
+                    if model_name not in model_costs:
+                        model_costs[model_name] = 0.0
+                    model_costs[model_name] = round(model_costs[model_name] + cost.amount, 3)
+            
+            # User breakdown (admin only)
+            user_costs = {}
+            if user.role == 'admin':
+                for cost in costs:
+                    user_obj = User.query.get(cost.user_id)
+                    username = user_obj.username if user_obj else 'Unknown'
+                    if username not in user_costs:
+                        user_costs[username] = 0.0
+                    user_costs[username] = round(user_costs[username] + cost.amount, 3)
+            
+            return jsonify({
+                'total_cost': round(total_cost, 2),
+                'daily_costs': [
+                    {'date': date, 'cost': cost} 
+                    for date, cost in sorted(daily_costs.items())
+                ],
+                'model_costs': [
+                    {'model': model, 'cost': cost} 
+                    for model, cost in model_costs.items()
+                ],
+                'user_costs': [
+                    {'user': user, 'cost': cost} 
+                    for user, cost in user_costs.items()
+                ],
+                'executions': len(set(cost.execution_id for cost in costs))
+            })
+            
+        except Exception as e:
+            app.logger.error(f"Get costs error: {e}")
+            return jsonify({'error': 'Failed to fetch costs'}), 500
+
+    # Admin routes for SQL executor (ADD THESE)
+    @app.route('/api/admin/tables', methods=['GET'])
+    @jwt_required()
+    @admin_required
+    def get_database_tables():
+        try:
+            tables = app.sql_executor.get_tables()
+            return jsonify({'data': tables})
+            
+        except Exception as e:
+            app.logger.error(f"Get tables error: {e}")
+            return jsonify({'error': 'Failed to fetch database tables'}), 500
+
+    @app.route('/api/admin/table/<table_name>/schema', methods=['GET'])
+    @jwt_required()
+    @admin_required
+    def get_table_schema(table_name):
+        try:
+            schema = app.sql_executor.get_table_schema(table_name)
+            return jsonify({'data': schema})
+            
+        except Exception as e:
+            app.logger.error(f"Get table schema error: {e}")
+            return jsonify({'error': 'Failed to fetch table schema'}), 500
+
+    @app.route('/api/admin/table/<table_name>/data', methods=['GET'])
+    @jwt_required()
+    @admin_required
+    def get_table_data(table_name):
+        try:
+            page = int(request.args.get('page', 1))
+            page_size = int(request.args.get('page_size', 50))
+            
+            data = app.sql_executor.get_table_data(table_name, page, page_size)
+            return jsonify({'data': data})
+            
+        except Exception as e:
+            app.logger.error(f"Get table data error: {e}")
+            return jsonify({'error': 'Failed to fetch table data'}), 500
+
+
     return app
+
 
 @contextmanager
 def get_db_connection():
